@@ -1,0 +1,17 @@
+# Build artifacts
+*.o
+*.res
+icon_inject.exe
+
+# Runtime config
+ping_monitor.ini
+imgui.ini
+bin/imgui.ini
+bin/ping_monitor.ini
+
+# SDL2.dll is copied from vendor at build time
+bin/SDL2.dll
+
+# Generated from ico.png (recreate with python + Pillow)
+app.ico
+app_icon.h
