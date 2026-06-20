@@ -21,6 +21,7 @@ typedef struct {
 
 typedef struct {
     int target_index;
+    int round;
     double avg_ping;
     double history_raw[MAX_HISTORY_VALUES];
     int history_count;
@@ -31,6 +32,7 @@ typedef struct {
     ChartPoint points[MAX_POINTS];
     int count;
     int max_points;
+    int next_round;
 } ChartData;
 
 void chart_init(ChartData* chart, int max_points);

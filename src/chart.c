@@ -45,6 +45,7 @@ void chart_init(ChartData* chart, int max_points) {
     memset(chart, 0, sizeof(ChartData));
     chart->max_points = max_points;
     chart->count = 0;
+    chart->next_round = 0;
 }
 
 int chart_add_point(ChartData* chart, int target_index, double avg_ping,
@@ -56,6 +57,7 @@ int chart_add_point(ChartData* chart, int target_index, double avg_ping,
     }
     ChartPoint* p = &chart->points[chart->count];
     p->target_index = target_index;
+    p->round = chart->next_round++;
     p->avg_ping = avg_ping;
     p->history_count = raw_count < MAX_HISTORY_VALUES ? raw_count : MAX_HISTORY_VALUES;
     memcpy(p->history_raw, raw_values, sizeof(double) * p->history_count);
@@ -71,6 +73,7 @@ int chart_add_point(ChartData* chart, int target_index, double avg_ping,
 
 void chart_clear(ChartData* chart) {
     chart->count = 0;
+    chart->next_round = 0;
 }
 
 void chart_render(const ChartData* chart, int target_count, const char* const* target_ips,
@@ -156,10 +159,21 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
     float plot_h = plot_max.y - plot_min.y;
 
     int total_points[MAX_TARGETS] = {0};
+    int min_round = 0, max_round = 0;
+    if (chart->count > 0) {
+        min_round = chart->points[0].round;
+        max_round = chart->points[0].round;
+    }
     for (int i = 0; i < chart->count; i++) {
         int t = chart->points[i].target_index;
+        int r = chart->points[i].round;
         if (t < MAX_TARGETS) total_points[t]++;
+        if (r < min_round) min_round = r;
+        if (r > max_round) max_round = r;
     }
+
+    int span = max_round - min_round;
+    if (span < 1) span = 1;
 
     double global_max = 10.0;
     for (int i = 0; i < chart->count; i++) {
@@ -188,11 +202,6 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
 
     dl->PushClipRect(plot_min, plot_max, true);
 
-    int total_rounds = 0;
-    for (int t = 0; t < target_count; t++) {
-        if (total_points[t] > total_rounds) total_rounds = total_points[t];
-    }
-
     for (int t = 0; t < target_count; t++) {
         if (total_points[t] == 0) continue;
 
@@ -203,16 +212,13 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
         ImU32 whisker_line = (col & 0x00FFFFFF) | 0x90000000;
         ImU32 median_line = dark ? IM_COL32(255, 255, 255, 180) : IM_COL32(0, 0, 0, 180);
 
-        int tp = total_points[t];
-        float x_step = plot_w / (float)(total_rounds > 1 ? total_rounds - 1 : 1);
-        int point_idx = 0;
         double prev_use_val = -1;
         float prev_x = 0;
 
         for (int i = 0; i < chart->count; i++) {
             if (chart->points[i].target_index != t) continue;
             const ChartPoint* pt = &chart->points[i];
-            float x = plot_min.x + point_idx * x_step;
+            float x = plot_min.x + (float)(pt->round - min_round) / span * plot_w;
 
             int has_timeout = 0;
             double valid_vals[MAX_HISTORY_VALUES] = {0};
@@ -234,14 +240,14 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
                 use_val = (use_mean && pt->avg_ping > 0) ? pt->avg_ping : med;
             }
 
-            if (point_idx > 0 && prev_use_val > 0 && use_val > 0) {
+            if (prev_use_val > 0 && use_val > 0) {
                 ImU32 line_col = has_timeout ? timeout_seg_col : ping_color(use_val, col);
                 dl->AddLine(ImVec2(prev_x, val_to_y(prev_use_val)), ImVec2(x, val_to_y(use_val)), line_col, 2.0f);
             }
             prev_use_val = use_val;
             prev_x = x;
 
-            float box_w = 0.25f * x_step;
+            float box_w = 0.25f * plot_w / (float)span;
             if (box_w > plot_w * 0.3f) box_w = plot_w * 0.3f;
             if (box_w < 3.0f) box_w = 3.0f;
 
@@ -293,35 +299,24 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
                     dl->AddCircleFilled(ImVec2(x, y_dot), 6.0f, ping_color(use_val, col));
                 }
             }
-
-            point_idx++;
         }
     }
 
     dl->PopClipRect();
 
-    int first_target = -1;
-    for (int t = 0; t < target_count; t++) {
-        if (total_points[t] == total_rounds) { first_target = t; break; }
-    }
-
-    if (total_rounds > 0 && first_target >= 0) {
+    if (chart->count > 0) {
         int label_count = (int)(plot_w / 100.0f);
         if (label_count < 2) label_count = 2;
-        int round_step = total_rounds / label_count;
-        if (round_step < 1) round_step = 1;
+        int label_step = span / label_count;
+        if (label_step < 1) label_step = 1;
 
-        float round_step_px = plot_w / (float)(total_rounds > 1 ? total_rounds - 1 : 1);
-
-        int ri = 0;
-        for (int i = 0; i < chart->count && ri < total_rounds; i++) {
-            if (chart->points[i].target_index != first_target) continue;
-            if (ri % round_step == 0 && chart->points[i].timestamp[0]) {
-                float px = plot_min.x + ri * round_step_px;
+        for (int i = 0; i < chart->count; i++) {
+            int rpos = chart->points[i].round - min_round;
+            if ((rpos == 0 || rpos == span || (rpos % label_step == 0)) && chart->points[i].timestamp[0]) {
+                float px = plot_min.x + (float)rpos / span * plot_w;
                 ImVec2 tsize = ImGui::CalcTextSize(chart->points[i].timestamp);
                 dl->AddText(ImVec2(px - tsize.x * 0.5f, plot_max.y + 5.0f), text_color, chart->points[i].timestamp);
             }
-            ri++;
         }
     }
 
