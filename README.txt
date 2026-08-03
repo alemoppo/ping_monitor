@@ -19,6 +19,8 @@ Features:
   - Configurable ping interval
   - Reset statistics
   - Per-target toggle between native ICMP API and ping.exe process
+  - Process name resolution: type e.g. "hearthstone.exe" instead of an IP
+    and it will auto-fill the IPs of the process's open TCP/UDP connections
   - Dark/Light theme toggle
   - Resizable window
   - Very low memory footprint (~10-20 MB)
@@ -36,6 +38,8 @@ PingMonitor/
     chart.h
     ping.c          - Ping logic (Windows ICMP API + ping.exe fallback)
     ping.h
+    proc.c          - Process name resolution (open TCP/UDP connection IPs)
+    proc.h
     config.c        - INI config file read/write
     config.h
     icon_data.h     - Generated icon pixel data (from ico.png)
@@ -89,6 +93,10 @@ USAGE
     - Max points: number of visible chart points (default: 30, max: 512)
     - Rolling avg pings: number of pings to average per point (default: 4)
     - ICMP checkbox: native ICMP API (faster) or ping.exe process (compatible)
+    - Instead of an IP you can type a process name (e.g. hearthstone.exe):
+      pressing "Go" resolves the open TCP/UDP connections of that process and
+      fills the row (plus extra rows) with the associated IPs. If the process
+      is not found, the text is treated as a hostname.
 3. Controls:
    - "Go": start monitoring
    - "Stop": stop monitoring

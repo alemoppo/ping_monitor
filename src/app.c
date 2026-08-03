@@ -1,4 +1,5 @@
 #include "app.h"
+#include "proc.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -146,6 +147,41 @@ static void stop_target(App* app, int idx) {
     SDL_WaitThread(t->thread, NULL);
     t->thread = NULL;
     t->running = 0;
+}
+
+static void start_or_resolve_target(App* app, int idx) {
+    PingTarget* t = &app->targets[idx];
+    if (t->running) return;
+
+    if (is_valid_ip(t->ip)) {
+        start_target(app, idx);
+        return;
+    }
+
+    char ips[PROC_MAX_IPS][PROC_IP_LEN];
+    int n = 0;
+    resolve_process_ips(t->ip, ips, &n);
+
+    if (n > 0) {
+        int original_count = app->target_count;
+        memcpy(t->ip, ips[0], PROC_IP_LEN);
+        for (int k = 1; k < n; k++) {
+            if (app->target_count >= MAX_TARGETS) break;
+            app_add_target(app);
+            int ni = app->target_count - 1;
+            memcpy(app->targets[ni].ip, ips[k], PROC_IP_LEN);
+            app->targets[ni].use_icmp = t->use_icmp;
+        }
+        app->config_dirty = 1;
+        start_target(app, idx);
+        for (int k = original_count; k < app->target_count; k++) {
+            start_target(app, k);
+        }
+    } else {
+        t->use_icmp = 0;
+        app->config_dirty = 1;
+        start_target(app, idx);
+    }
 }
 
 void app_init(App* app, const AppConfig* cfg) {
@@ -328,7 +364,7 @@ void app_render(App* app) {
             if (ImGui::Button("Stop", ImVec2(btn_w, 0))) stop_target(app, i);
             ImGui::PopStyleColor(2);
         } else {
-            if (ImGui::Button("Go", ImVec2(btn_w, 0))) start_target(app, i);
+            if (ImGui::Button("Go", ImVec2(btn_w, 0))) start_or_resolve_target(app, i);
         }
         ImGui::SameLine(0, gap);
 

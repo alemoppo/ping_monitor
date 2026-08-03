@@ -29,7 +29,7 @@ CXXFLAGS = $(CFLAGS)
 LDFLAGS = -L$(SDL2_DIR)/lib \
     -Wl,-subsystem,windows \
     -lmingw32 -lSDL2main -lSDL2 \
-    -lopengl32 -lgdi32 -limm32 -lsetupapi -liphlpapi
+    -lopengl32 -lgdi32 -limm32 -lsetupapi -liphlpapi -lws2_32
 
 CPP = "C:\Program Files\mingw64\bin\cpp.exe"
 WINDRES = "C:\Program Files\mingw64\bin\windres.exe"
