@@ -1,9 +1,8 @@
 #include "chart.h"
+#include "config.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-
-#define MAX_TARGETS 4
 
 static const ImU32 TRACE_COLORS_DARK[] = {
     IM_COL32(80, 200, 80, 255),
@@ -41,21 +40,28 @@ static ImU32 ping_color(double val, ImU32 trace_col) {
     return IM_COL32(220, 0, 0, 255);
 }
 
+static int chart_idx(const ChartData* chart, int i) {
+    if (chart->max_points <= 0) return 0;
+    return (chart->head + i) % chart->max_points;
+}
+
 void chart_init(ChartData* chart, int max_points) {
     memset(chart, 0, sizeof(ChartData));
     chart->max_points = max_points;
-    chart->count = 0;
-    chart->next_round = 0;
 }
 
 int chart_add_point(ChartData* chart, int target_index, double avg_ping,
                     const double* raw_values, int raw_count, const char* timestamp) {
+    if (chart->max_points <= 0) return 0;
+    int idx;
     if (chart->count >= chart->max_points) {
-        memmove(&chart->points[0], &chart->points[1],
-                sizeof(ChartPoint) * (chart->count - 1));
-        chart->count--;
+        idx = chart->head;
+        chart->head = (chart->head + 1) % chart->max_points;
+    } else {
+        idx = (chart->head + chart->count) % chart->max_points;
+        chart->count++;
     }
-    ChartPoint* p = &chart->points[chart->count];
+    ChartPoint* p = &chart->points[idx];
     p->target_index = target_index;
     p->round = chart->next_round++;
     p->avg_ping = avg_ping;
@@ -67,12 +73,12 @@ int chart_add_point(ChartData* chart, int target_index, double avg_ping,
     } else {
         p->timestamp[0] = '\0';
     }
-    chart->count++;
     return 1;
 }
 
 void chart_clear(ChartData* chart) {
     chart->count = 0;
+    chart->head = 0;
     chart->next_round = 0;
 }
 
@@ -108,9 +114,9 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
     VisibleStats vis[MAX_TARGETS] = {{0}};
 
     for (int i = 0; i < chart->count; i++) {
-        int t = chart->points[i].target_index;
+        const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
+        int t = pt->target_index;
         if (t >= target_count) continue;
-        const ChartPoint* pt = &chart->points[i];
         VisibleStats* v = &vis[t];
         for (int h = 0; h < pt->history_count; h++) {
             double val = pt->history_raw[h];
@@ -161,12 +167,13 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
     int total_points[MAX_TARGETS] = {0};
     int min_round = 0, max_round = 0;
     if (chart->count > 0) {
-        min_round = chart->points[0].round;
-        max_round = chart->points[0].round;
+        min_round = chart->points[chart_idx(chart, 0)].round;
+        max_round = chart->points[chart_idx(chart, 0)].round;
     }
     for (int i = 0; i < chart->count; i++) {
-        int t = chart->points[i].target_index;
-        int r = chart->points[i].round;
+        const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
+        int t = pt->target_index;
+        int r = pt->round;
         if (t < MAX_TARGETS) total_points[t]++;
         if (r < min_round) min_round = r;
         if (r > max_round) max_round = r;
@@ -177,7 +184,7 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
 
     double global_max = 10.0;
     for (int i = 0; i < chart->count; i++) {
-        const ChartPoint* pt = &chart->points[i];
+        const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
         for (int j = 0; j < pt->history_count; j++) {
             double v = pt->history_raw[j];
             if (v > 0 && v > global_max) global_max = v * 1.1;
@@ -202,6 +209,10 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
 
     dl->PushClipRect(plot_min, plot_max, true);
 
+    float box_w = 0.25f * plot_w / (float)span;
+    if (box_w > plot_w * 0.3f) box_w = plot_w * 0.3f;
+    if (box_w < 3.0f) box_w = 3.0f;
+
     for (int t = 0; t < target_count; t++) {
         if (total_points[t] == 0) continue;
 
@@ -212,12 +223,13 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
         ImU32 whisker_line = (col & 0x00FFFFFF) | 0x90000000;
         ImU32 median_line = dark ? IM_COL32(255, 255, 255, 180) : IM_COL32(0, 0, 0, 180);
 
-        double prev_use_val = -1;
+        int has_prev = 0;
         float prev_x = 0;
+        double prev_use_val = 0;
 
         for (int i = 0; i < chart->count; i++) {
-            if (chart->points[i].target_index != t) continue;
-            const ChartPoint* pt = &chart->points[i];
+            const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
+            if (pt->target_index != t) continue;
             float x = plot_min.x + (float)(pt->round - min_round) / span * plot_w;
 
             int has_timeout = 0;
@@ -240,16 +252,17 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
                 use_val = (use_mean && pt->avg_ping > 0) ? pt->avg_ping : med;
             }
 
-            if (prev_use_val > 0 && use_val > 0) {
+            if (has_prev && use_val > 0) {
                 ImU32 line_col = has_timeout ? timeout_seg_col : ping_color(use_val, col);
                 dl->AddLine(ImVec2(prev_x, val_to_y(prev_use_val)), ImVec2(x, val_to_y(use_val)), line_col, 2.0f);
             }
-            prev_use_val = use_val;
-            prev_x = x;
-
-            float box_w = 0.25f * plot_w / (float)span;
-            if (box_w > plot_w * 0.3f) box_w = plot_w * 0.3f;
-            if (box_w < 3.0f) box_w = 3.0f;
+            if (use_val > 0) {
+                has_prev = 1;
+                prev_use_val = use_val;
+                prev_x = x;
+            } else {
+                has_prev = 0;
+            }
 
             if (valid_count == 0 && has_timeout) {
                 draw_x(dl, x, val_to_y(0), 12.0f, timeout_col, 2.0f);
@@ -311,11 +324,12 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
         if (label_step < 1) label_step = 1;
 
         for (int i = 0; i < chart->count; i++) {
-            int rpos = chart->points[i].round - min_round;
-            if ((rpos == 0 || rpos == span || (rpos % label_step == 0)) && chart->points[i].timestamp[0]) {
+            const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
+            int rpos = pt->round - min_round;
+            if ((rpos == 0 || rpos == span || (rpos % label_step == 0)) && pt->timestamp[0]) {
                 float px = plot_min.x + (float)rpos / span * plot_w;
-                ImVec2 tsize = ImGui::CalcTextSize(chart->points[i].timestamp);
-                dl->AddText(ImVec2(px - tsize.x * 0.5f, plot_max.y + 5.0f), text_color, chart->points[i].timestamp);
+                ImVec2 tsize = ImGui::CalcTextSize(pt->timestamp);
+                dl->AddText(ImVec2(px - tsize.x * 0.5f, plot_max.y + 5.0f), text_color, pt->timestamp);
             }
         }
     }

@@ -11,28 +11,26 @@ extern "C" {
 #endif
 
 #define MAX_RAW_PINGS 512
-#define MAX_STATS_ENTRIES 100000
 
 typedef struct {
     char ip[128];
     float interval;
+    int use_icmp;
     int running;
     int pending_stop;
 
     double raw_pings[MAX_RAW_PINGS];
     int raw_count;
 
-    double all_valid_pings[MAX_STATS_ENTRIES];
     int valid_count;
+    int lost_count;
 
     double stats_avg;
     double stats_min;
     double stats_max;
     int has_stats;
-    int lost_count;
 
     SDL_Thread* thread;
-    char timestamp_buffers[MAX_POINTS][16];
 } PingTarget;
 
 typedef struct {

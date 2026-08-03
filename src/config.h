@@ -11,6 +11,7 @@ extern "C" {
 typedef struct {
     char ip[128];
     float interval;
+    int use_icmp;
 } TargetConfig;
 
 typedef struct {

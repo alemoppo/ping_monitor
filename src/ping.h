@@ -1,20 +1,7 @@
 #ifndef PING_H
 #define PING_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct {
-    double avg_ms;
-    int timeout;
-    int count;
-} PingResult;
-
-int do_ping(const char* ip, double* ms_out);
-
-#ifdef __cplusplus
-}
-#endif
+int do_ping_icmp(const char* ip, double* ms_out);
+int do_ping_legacy(const char* ip, double* ms_out);
 
 #endif /* PING_H */

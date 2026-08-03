@@ -32,6 +32,7 @@ typedef struct {
     ChartPoint points[MAX_POINTS];
     int count;
     int max_points;
+    int head;
     int next_round;
 } ChartData;
 

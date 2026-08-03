@@ -148,19 +148,6 @@ int main(int argc, char* argv[]) {
 
     app_shutdown(app);
 
-    AppConfig save_cfg;
-    save_cfg.target_count = app->target_count;
-    for (int i = 0; i < app->target_count; i++) {
-        strncpy(save_cfg.targets[i].ip, app->targets[i].ip, 127);
-        save_cfg.targets[i].ip[127] = '\0';
-        save_cfg.targets[i].interval = app->targets[i].interval;
-    }
-    save_cfg.max_points = app->max_points;
-    save_cfg.rolling_avg = app->rolling_avg;
-    save_cfg.dark_mode = app->dark_mode;
-    save_cfg.use_mean = app->use_mean;
-    config_save(&save_cfg);
-
     free(app);
 
     ImGui_ImplOpenGL3_Shutdown();

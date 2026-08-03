@@ -18,6 +18,7 @@ Features:
   - Configurable max chart points
   - Configurable ping interval
   - Reset statistics
+  - Per-target toggle between native ICMP API and ping.exe process
   - Dark/Light theme toggle
   - Resizable window
   - Very low memory footprint (~10-20 MB)
@@ -33,7 +34,7 @@ PingMonitor/
     app.h
     chart.c         - Chart rendering with ImDrawList
     chart.h
-    ping.c          - Ping logic (Windows, CreateProcess)
+    ping.c          - Ping logic (Windows ICMP API + ping.exe fallback)
     ping.h
     config.c        - INI config file read/write
     config.h
@@ -82,11 +83,12 @@ USAGE
 -----
 1. Run the application:
      ./bin/ping_monitor.exe
-2. Configuration:
-   - IP address or hostname (default: 8.8.8.8)
-   - Interval (s): seconds between pings (default: 0.5)
-   - Max points: number of visible chart points (default: 30, max: 512)
-   - Rolling avg pings: number of pings to average per point (default: 4)
+ 2. Configuration:
+    - IP address or hostname (default: 8.8.8.8)
+    - Interval (s): seconds between pings (default: 0.5)
+    - Max points: number of visible chart points (default: 30, max: 512)
+    - Rolling avg pings: number of pings to average per point (default: 4)
+    - ICMP checkbox: native ICMP API (faster) or ping.exe process (compatible)
 3. Controls:
    - "Go": start monitoring
    - "Stop": stop monitoring
@@ -102,8 +104,8 @@ USAGE
    - Tooltip on hover over stats
 TECHNICAL NOTES
 ---------------
-- Uses CreateProcess on Windows to run ping and capture output,
-  avoiding subprocess overhead of Python.
+- Uses the Windows ICMP API (IcmpSendEcho) by default, with a ping.exe
+  CreateProcess fallback for hostnames, avoiding subprocess overhead of Python.
 - Threads managed with SDL_Thread and mutex for thread safety.
 - Chart rendering uses ImDrawList (immediate mode) — no persistent
   object overhead.

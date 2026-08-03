@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <math.h>
 
 typedef struct {
     App* app;
@@ -33,7 +32,11 @@ static int ping_thread_func(void* data) {
         SDL_UnlockMutex(app->mutex);
 
         double ms = 0;
-        int ret = do_ping(ip, &ms);
+        int ret;
+        if (t->use_icmp)
+            ret = do_ping_icmp(ip, &ms);
+        else
+            ret = do_ping_legacy(ip, &ms);
 
         SDL_LockMutex(app->mutex);
         if (t->pending_stop) {
@@ -45,8 +48,18 @@ static int ping_thread_func(void* data) {
             t->raw_pings[t->raw_count++] = (ret == 0) ? ms : -1.0;
         }
 
-        if (ret == 0 && t->valid_count < MAX_STATS_ENTRIES) {
-            t->all_valid_pings[t->valid_count++] = ms;
+        if (ret == 0) {
+            t->valid_count++;
+            if (t->has_stats) {
+                if (ms < t->stats_min) t->stats_min = ms;
+                if (ms > t->stats_max) t->stats_max = ms;
+                t->stats_avg = (t->stats_avg * (t->valid_count - 1) + ms) / t->valid_count;
+            } else {
+                t->stats_min = ms;
+                t->stats_max = ms;
+                t->stats_avg = ms;
+                t->has_stats = 1;
+            }
         } else if (ret == -1) {
             t->lost_count++;
         }
@@ -67,27 +80,13 @@ static int ping_thread_func(void* data) {
 
             time_t now = time(NULL);
             struct tm* tm_info = localtime(&now);
-            int ts_idx = app->chart.count % MAX_POINTS;
-            strftime(t->timestamp_buffers[ts_idx], 16, "%H:%M:%S", tm_info);
+            char ts[16];
+            strftime(ts, sizeof(ts), "%H:%M:%S", tm_info);
 
-            chart_add_point(&app->chart, idx, avg, raw_buf, raw_buf_count, t->timestamp_buffers[ts_idx]);
+            chart_add_point(&app->chart, idx, avg, raw_buf, raw_buf_count, ts);
 
             t->raw_count -= rolling_avg;
             memmove(t->raw_pings, t->raw_pings + rolling_avg, t->raw_count * sizeof(double));
-
-            if (t->valid_count > 0) {
-                double s_min = t->all_valid_pings[0], s_max = t->all_valid_pings[0], s_sum = 0;
-                for (int i = 0; i < t->valid_count; i++) {
-                    double v = t->all_valid_pings[i];
-                    s_sum += v;
-                    if (v < s_min) s_min = v;
-                    if (v > s_max) s_max = v;
-                }
-                t->stats_avg = s_sum / t->valid_count;
-                t->stats_min = s_min;
-                t->stats_max = s_max;
-                t->has_stats = 1;
-            }
         }
         SDL_UnlockMutex(app->mutex);
 
@@ -102,7 +101,8 @@ static void start_target(App* app, int idx) {
 
     int points_before = 0;
     for (int i = 0; i < app->chart.count; i++) {
-        if (app->chart.points[i].target_index == idx) points_before++;
+        int pi = (app->chart.head + i) % app->chart.max_points;
+        if (app->chart.points[pi].target_index == idx) points_before++;
     }
 
     t->pending_stop = 0;
@@ -113,15 +113,22 @@ static void start_target(App* app, int idx) {
     t->stats_avg = 0; t->stats_min = 0; t->stats_max = 0;
     t->running = 1;
 
-    if (points_before > 0) {
-        int write = 0;
-        for (int i = 0; i < app->chart.count; i++) {
-            if (app->chart.points[i].target_index != idx) {
-                if (write != i) app->chart.points[write] = app->chart.points[i];
-                write++;
+    if (points_before > 0 && app->chart.max_points > 0) {
+        int max = app->chart.max_points < MAX_POINTS ? app->chart.max_points : MAX_POINTS;
+        ChartPoint* temp = (ChartPoint*)SDL_malloc(sizeof(ChartPoint) * max);
+        if (temp) {
+            int write = 0;
+            for (int i = 0; i < app->chart.count; i++) {
+                int pi = (app->chart.head + i) % app->chart.max_points;
+                if (app->chart.points[pi].target_index != idx) {
+                    temp[write++] = app->chart.points[pi];
+                }
             }
+            app->chart.head = 0;
+            app->chart.count = write;
+            memcpy(app->chart.points, temp, sizeof(ChartPoint) * write);
+            SDL_free(temp);
         }
-        app->chart.count = write;
     }
 
     ThreadCtx* ctx = (ThreadCtx*)SDL_malloc(sizeof(ThreadCtx));
@@ -158,6 +165,7 @@ void app_init(App* app, const AppConfig* cfg) {
         strncpy(t->ip, cfg->targets[i].ip[0] ? cfg->targets[i].ip : (i == 0 ? "8.8.8.8" : "1.1.1.1"), 127);
         t->ip[127] = '\0';
         t->interval = cfg->targets[i].interval > 0 ? cfg->targets[i].interval : 0.5f;
+        t->use_icmp = cfg->targets[i].use_icmp;
     }
 }
 
@@ -190,6 +198,7 @@ void app_add_target(App* app) {
     memset(t, 0, sizeof(PingTarget));
     strncpy(t->ip, "1.1.1.1", 127);
     t->interval = 0.5f;
+    t->use_icmp = 1;
     app->target_count++;
     app->config_dirty = 1;
 }
@@ -203,7 +212,8 @@ void app_remove_target(App* app, int idx) {
 
     int points_before = 0;
     for (int i = 0; i < app->chart.count; i++) {
-        if (app->chart.points[i].target_index == idx) points_before++;
+        int pi = (app->chart.head + i) % app->chart.max_points;
+        if (app->chart.points[pi].target_index == idx) points_before++;
     }
 
     for (int i = idx; i < app->target_count - 1; i++) {
@@ -212,16 +222,23 @@ void app_remove_target(App* app, int idx) {
     memset(&app->targets[app->target_count - 1], 0, sizeof(PingTarget));
     app->target_count--;
 
-    if (points_before > 0) {
-        int write = 0;
-        for (int i = 0; i < app->chart.count; i++) {
-            int ti = app->chart.points[i].target_index;
-            if (ti == idx) continue;
-            if (ti > idx) app->chart.points[i].target_index--;
-            if (write != i) app->chart.points[write] = app->chart.points[i];
-            write++;
+    if (points_before > 0 && app->chart.max_points > 0) {
+        int max = app->chart.max_points < MAX_POINTS ? app->chart.max_points : MAX_POINTS;
+        ChartPoint* temp = (ChartPoint*)SDL_malloc(sizeof(ChartPoint) * max);
+        if (temp) {
+            int write = 0;
+            for (int i = 0; i < app->chart.count; i++) {
+                int pi = (app->chart.head + i) % app->chart.max_points;
+                int ti = app->chart.points[pi].target_index;
+                if (ti == idx) continue;
+                if (ti > idx) app->chart.points[pi].target_index--;
+                temp[write++] = app->chart.points[pi];
+            }
+            app->chart.head = 0;
+            app->chart.count = write;
+            memcpy(app->chart.points, temp, sizeof(ChartPoint) * write);
+            SDL_free(temp);
         }
-        app->chart.count = write;
     }
     app->config_dirty = 1;
 }
@@ -264,7 +281,11 @@ void app_render(App* app) {
     }
 
     ImGui::SameLine(0, gap);
-    ImGui::Checkbox("Media##use_mean", (bool*)&app->use_mean);
+    bool use_mean_val = (app->use_mean != 0);
+    if (ImGui::Checkbox("Media##use_mean", &use_mean_val)) {
+        app->use_mean = use_mean_val ? 1 : 0;
+        app->config_dirty = 1;
+    }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Se attivo usa la media, altrimenti la mediana");
 
     ImGui::Separator();
@@ -282,6 +303,16 @@ void app_render(App* app) {
         ImGui::SetNextItemWidth(item_w);
         ImGui::InputText(id_buf, t->ip, sizeof(t->ip), 0);
         if (ImGui::IsItemDeactivatedAfterEdit()) app->config_dirty = 1;
+        ImGui::SameLine(0, 4.0f);
+
+        bool icmp_val = (t->use_icmp != 0);
+        snprintf(id_buf, sizeof(id_buf), "ICMP##icmp%d", i);
+        if (ImGui::Checkbox(id_buf, &icmp_val)) {
+            t->use_icmp = icmp_val ? 1 : 0;
+            app->config_dirty = 1;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("ICMP API (piu veloce) / Processo ping.exe (compatibile)");
         ImGui::SameLine(0, gap);
 
         snprintf(id_buf, sizeof(id_buf), "##int%d", i);
@@ -304,14 +335,21 @@ void app_render(App* app) {
         if (ImGui::Button("Reset", ImVec2(btn_w, 0))) {
             SDL_LockMutex(app->mutex);
 
-            int write = 0;
-            for (int j = 0; j < app->chart.count; j++) {
-                if (app->chart.points[j].target_index != i) {
-                    if (write != j) app->chart.points[write] = app->chart.points[j];
-                    write++;
+            int max = app->chart.max_points < MAX_POINTS ? app->chart.max_points : MAX_POINTS;
+            ChartPoint* temp = (ChartPoint*)SDL_malloc(sizeof(ChartPoint) * max);
+            if (temp && app->chart.max_points > 0) {
+                int write = 0;
+                for (int j = 0; j < app->chart.count; j++) {
+                    int pj = (app->chart.head + j) % app->chart.max_points;
+                    if (app->chart.points[pj].target_index != i) {
+                        temp[write++] = app->chart.points[pj];
+                    }
                 }
+                app->chart.head = 0;
+                app->chart.count = write;
+                memcpy(app->chart.points, temp, sizeof(ChartPoint) * write);
+                SDL_free(temp);
             }
-            app->chart.count = write;
 
             t->raw_count = 0;
             t->valid_count = 0; t->has_stats = 0; t->lost_count = 0;
@@ -361,6 +399,7 @@ void app_render(App* app) {
             strncpy(cfg.targets[i].ip, app->targets[i].ip, 127);
             cfg.targets[i].ip[127] = '\0';
             cfg.targets[i].interval = app->targets[i].interval;
+            cfg.targets[i].use_icmp = app->targets[i].use_icmp;
         }
         cfg.max_points = app->max_points;
         cfg.rolling_avg = app->rolling_avg;

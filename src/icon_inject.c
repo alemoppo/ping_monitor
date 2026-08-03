@@ -8,8 +8,10 @@ static BOOL AddIconToExe(const char* exePath, const char* iconPath) {
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
     void* data = malloc(size);
-    fread(data, 1, size, f);
+    if (!data) { fclose(f); return FALSE; }
+    size_t bytes_read = fread(data, 1, size, f);
     fclose(f);
+    if (bytes_read != (size_t)size) { free(data); return FALSE; }
 
     HANDLE hRes = BeginUpdateResourceA(exePath, FALSE);
     if (!hRes) { fprintf(stderr, "BeginUpdateResource failed: %lu\n", GetLastError()); free(data); return FALSE; }

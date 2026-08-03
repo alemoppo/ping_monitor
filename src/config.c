@@ -19,6 +19,7 @@ void config_load(AppConfig* cfg) {
     cfg->dark_mode = 1;
     cfg->use_mean = 0;
     cfg->targets[0].interval = 0.5f;
+    cfg->targets[0].use_icmp = 1;
 
     FILE* f = fopen(CONFIG_FILE, "r");
     if (!f) return;
@@ -46,6 +47,11 @@ void config_load(AppConfig* cfg) {
                 cfg->targets[idx].interval = (float)atof(val);
                 if (cfg->targets[idx].interval <= 0.0f) cfg->targets[idx].interval = 0.5f;
             }
+        } else if (strncmp(key, "use_icmp", 8) == 0) {
+            int idx = atoi(key + 8);
+            if (idx >= 0 && idx < MAX_TARGETS) {
+                cfg->targets[idx].use_icmp = atoi(val) != 0;
+            }
         } else if (strcmp(key, "max_points") == 0) {
             cfg->max_points = atoi(val);
             if (cfg->max_points < 5) cfg->max_points = 30;
@@ -57,7 +63,7 @@ void config_load(AppConfig* cfg) {
             cfg->dark_mode = atoi(val);
             if (cfg->dark_mode != 0 && cfg->dark_mode != 1) cfg->dark_mode = 1;
         } else if (strcmp(key, "use_mean") == 0) {
-            cfg->use_mean = atoi(val) ? 1 : 0;
+            cfg->use_mean = atoi(val) != 0;
         }
     }
     fclose(f);
@@ -71,6 +77,7 @@ void config_save(const AppConfig* cfg) {
     for (int i = 0; i < cfg->target_count; i++) {
         fprintf(f, "ip%d=%s\n", i, cfg->targets[i].ip);
         fprintf(f, "interval%d=%.1f\n", i, cfg->targets[i].interval);
+        fprintf(f, "use_icmp%d=%d\n", i, cfg->targets[i].use_icmp);
     }
     fprintf(f, "max_points=%d\n", cfg->max_points);
     fprintf(f, "rolling_avg=%d\n", cfg->rolling_avg);
