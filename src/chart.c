@@ -46,6 +46,7 @@ static int chart_idx(const ChartData* chart, int i) {
 }
 
 int chart_init(ChartData* chart, int max_points) {
+    if (!chart) return 0;
     memset(chart, 0, sizeof(ChartData));
     if (max_points < 5) max_points = 5;
     if (max_points > MAX_POINTS) max_points = MAX_POINTS;
@@ -148,6 +149,7 @@ static void compute_point_stats(ChartPoint* p, const double* raw_values, int raw
 
 int chart_add_point(ChartData* chart, int target_index, double avg_ping,
                     const double* raw_values, int raw_count, const char* timestamp) {
+    if (!chart) return 0;
     if (chart->max_points <= 0 || !chart->points) return 0;
     if (raw_count < 0 || (raw_count > 0 && !raw_values)) return 0;
     if (raw_count > MAX_RAW_PINGS) return 0;

@@ -101,8 +101,12 @@ static int ping_thread_func(void* data) {
 
 static void start_target(App* app, int idx) {
     PingTarget* t = &app->targets[idx];
-    if (t->running) return;
 
+    SDL_LockMutex(app->mutex);
+    if (t->running) {
+        SDL_UnlockMutex(app->mutex);
+        return;
+    }
     t->pending_stop = 0;
     t->raw_count = 0;
     t->valid_count = 0;
@@ -110,13 +114,13 @@ static void start_target(App* app, int idx) {
     t->lost_count = 0;
     t->stats_avg = 0; t->stats_min = 0; t->stats_max = 0;
     t->running = 1;
-
-    SDL_LockMutex(app->mutex);
     int compact_ok = chart_remove_points_for_target(&app->chart, idx);
     SDL_UnlockMutex(app->mutex);
 
     if (!compact_ok) {
+        SDL_LockMutex(app->mutex);
         t->running = 0;
+        SDL_UnlockMutex(app->mutex);
         return;
     }
 
@@ -136,22 +140,30 @@ static void start_target(App* app, int idx) {
 
 static void stop_target(App* app, int idx) {
     PingTarget* t = &app->targets[idx];
-    if (!t->running) return;
     SDL_LockMutex(app->mutex);
+    if (!t->running) {
+        SDL_UnlockMutex(app->mutex);
+        return;
+    }
     t->pending_stop = 1;
     SDL_UnlockMutex(app->mutex);
     SDL_WaitThread(t->thread, NULL);
+    SDL_LockMutex(app->mutex);
     t->thread = NULL;
     t->running = 0;
+    SDL_UnlockMutex(app->mutex);
 }
 
 static void start_or_resolve_target(App* app, int idx) {
     PingTarget* t = &app->targets[idx];
-    if (t->running) return;
 
+    SDL_LockMutex(app->mutex);
+    if (t->running) {
+        SDL_UnlockMutex(app->mutex);
+        return;
+    }
     char ip[128];
     int use_icmp;
-    SDL_LockMutex(app->mutex);
     strncpy(ip, t->ip, sizeof(ip) - 1);
     ip[sizeof(ip) - 1] = '\0';
     use_icmp = t->use_icmp;
@@ -315,7 +327,10 @@ void app_render(App* app) {
     ImGui::Text("Media su N ping:");
     ImGui::SameLine(0, gap);
     ImGui::SetNextItemWidth(50.0f);
-    int rolling_avg_val = app->rolling_avg;
+    int rolling_avg_val;
+    SDL_LockMutex(app->mutex);
+    rolling_avg_val = app->rolling_avg;
+    SDL_UnlockMutex(app->mutex);
     if (ImGui::InputInt("##rolling_avg", &rolling_avg_val, 0, 0)) {
         if (rolling_avg_val < 1) rolling_avg_val = 1;
         if (rolling_avg_val > MAX_RAW_PINGS) rolling_avg_val = MAX_RAW_PINGS;
@@ -365,8 +380,14 @@ void app_render(App* app) {
         snprintf(id_buf, sizeof(id_buf), "##ip%d", i);
         ImGui::SetNextItemWidth(item_w);
         char ip_buf[128];
+        int use_icmp_val;
+        float interval_val;
+        SDL_LockMutex(app->mutex);
         strncpy(ip_buf, t->ip, sizeof(ip_buf) - 1);
         ip_buf[sizeof(ip_buf) - 1] = '\0';
+        use_icmp_val = t->use_icmp;
+        interval_val = t->interval;
+        SDL_UnlockMutex(app->mutex);
         ImGui::InputText(id_buf, ip_buf, sizeof(ip_buf), 0);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             SDL_LockMutex(app->mutex);
@@ -377,7 +398,7 @@ void app_render(App* app) {
         }
         ImGui::SameLine(0, 4.0f);
 
-        bool icmp_val = (t->use_icmp != 0);
+        bool icmp_val = (use_icmp_val != 0);
         snprintf(id_buf, sizeof(id_buf), "ICMP##icmp%d", i);
         if (ImGui::Checkbox(id_buf, &icmp_val)) {
             SDL_LockMutex(app->mutex);
@@ -391,7 +412,6 @@ void app_render(App* app) {
 
         snprintf(id_buf, sizeof(id_buf), "##int%d", i);
         ImGui::SetNextItemWidth(80.0f);
-        float interval_val = t->interval;
         ImGui::InputFloat(id_buf, &interval_val, 0.1f, 0.5f, "%.1f");
         if (interval_val < 0.1f) interval_val = 0.1f;
         if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -419,11 +439,12 @@ void app_render(App* app) {
         if (ImGui::Button("Reset", ImVec2(btn_w, 0))) {
             SDL_LockMutex(app->mutex);
 
-            chart_remove_points_for_target(&app->chart, i);
-
-            t->raw_count = 0;
-            t->valid_count = 0; t->has_stats = 0; t->lost_count = 0;
-            t->stats_avg = 0; t->stats_min = 0; t->stats_max = 0;
+            int ok = chart_remove_points_for_target(&app->chart, i);
+            if (ok) {
+                t->raw_count = 0;
+                t->valid_count = 0; t->has_stats = 0; t->lost_count = 0;
+                t->stats_avg = 0; t->stats_min = 0; t->stats_max = 0;
+            }
 
             SDL_UnlockMutex(app->mutex);
         }
