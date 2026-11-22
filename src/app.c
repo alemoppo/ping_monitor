@@ -126,7 +126,9 @@ static void start_target(App* app, int idx) {
 
     ThreadCtx* ctx = (ThreadCtx*)SDL_malloc(sizeof(ThreadCtx));
     if (!ctx) {
+        SDL_LockMutex(app->mutex);
         t->running = 0;
+        SDL_UnlockMutex(app->mutex);
         return;
     }
     ctx->app = app;
@@ -134,7 +136,9 @@ static void start_target(App* app, int idx) {
     t->thread = SDL_CreateThread(ping_thread_func, "ping_thread", ctx);
     if (!t->thread) {
         SDL_free(ctx);
+        SDL_LockMutex(app->mutex);
         t->running = 0;
+        SDL_UnlockMutex(app->mutex);
     }
 }
 
@@ -278,8 +282,12 @@ void app_remove_target(App* app, int idx) {
     if (app->target_count <= 1 || idx < 0 || idx >= app->target_count) return;
 
     int running_before[MAX_TARGETS];
+    SDL_LockMutex(app->mutex);
     for (int i = idx; i < app->target_count; i++) {
         running_before[i] = app->targets[i].running;
+    }
+    SDL_UnlockMutex(app->mutex);
+    for (int i = idx; i < app->target_count; i++) {
         if (running_before[i]) stop_target(app, i);
     }
 
