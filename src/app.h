@@ -10,8 +10,6 @@
 extern "C" {
 #endif
 
-#define MAX_RAW_PINGS 512
-
 typedef struct {
     char ip[128];
     float interval;

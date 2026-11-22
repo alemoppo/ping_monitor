@@ -7,6 +7,7 @@ extern "C" {
 
 #define CONFIG_FILE "ping_monitor.ini"
 #define MAX_TARGETS 4
+#define MAX_RAW_PINGS 512
 
 typedef struct {
     char ip[128];

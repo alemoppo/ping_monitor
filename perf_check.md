@@ -56,11 +56,29 @@ Non emerge la necessità di un limite a 30 FPS o di ottimizzazioni CPU urgenti.
    precalcolate: legenda e global_max non scandiscono più lo storico a ogni frame.
 4. **Verifica VSync** in main.c con log di `SDL_GL_GetSwapInterval()`.
 
-## Ottimizzazioni suggerite ma non applicate (per scelta di ChatGPT: misurare prima)
-- Allocazione dinamica di `ChartData` in base a max_points.
+## Ottimizzazioni applicate (fase 2, dopo revisione ChatGPT)
+1. **`ChartData.points` dinamico** in base a `max_points`:
+   - `chart_init()` alloca solo i punti necessari;
+   - `chart_resize()` ridimensiona a runtime conservando i punti più recenti;
+   - `chart_shutdown()` libera la memoria.
+2. **`history_raw`/`history_count` rimossi da `ChartPoint`**:
+   - il rendering usa solo statistiche precalcolate;
+   - il buffer temporaneo per ordinare i campioni esiste solo durante
+     `chart_add_point()`.
+3. **Compattazione punti** centralizzata in `chart_remove_points_for_target()`
+   e `chart_remove_target_and_shift()` (Start, Reset, Remove target).
+4. **Thread safety**: `chart_render()` e le operazioni sul grafico avvengono
+   sotto il mutex dell'app.
+5. **`rolling_avg`**: limite superiore `MAX_RAW_PINGS` e azzeramento di
+   `raw_count` quando cambia a runtime.
+
+Con 30 punti la memoria del grafico passa da ~317 KB a ~4 KB.
+Test di unità su init/add/resize/remove/shutdown: OK.
+
+## Ottimizzazioni suggerite ma non applicate
 - Riutilizzo dell'handle ICMP per thread (priorità bassa).
-- Limite a 30 FPS (solo se VSync non effettivo).
-- Riduzione ulteriore delle scansioni con cache persistenti.
+- Limite a 30 FPS (non necessario: CPU ~5% di un core).
+- Passaggio da double a float (guadagno ~130 KB, non prioritario).
 
 ## Prossimi passi consigliati
 1. Misurare CPU con ping attivi su 4 target.

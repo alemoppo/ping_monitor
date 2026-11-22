@@ -59,6 +59,7 @@ void config_load(AppConfig* cfg) {
         } else if (strcmp(key, "rolling_avg") == 0) {
             cfg->rolling_avg = atoi(val);
             if (cfg->rolling_avg < 1) cfg->rolling_avg = 4;
+            if (cfg->rolling_avg > MAX_RAW_PINGS) cfg->rolling_avg = MAX_RAW_PINGS;
         } else if (strcmp(key, "dark_mode") == 0) {
             cfg->dark_mode = atoi(val);
             if (cfg->dark_mode != 0 && cfg->dark_mode != 1) cfg->dark_mode = 1;

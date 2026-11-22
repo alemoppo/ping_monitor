@@ -100,12 +100,6 @@ static void start_target(App* app, int idx) {
     PingTarget* t = &app->targets[idx];
     if (t->running) return;
 
-    int points_before = 0;
-    for (int i = 0; i < app->chart.count; i++) {
-        int pi = (app->chart.head + i) % app->chart.max_points;
-        if (app->chart.points[pi].target_index == idx) points_before++;
-    }
-
     t->pending_stop = 0;
     t->raw_count = 0;
     t->valid_count = 0;
@@ -114,23 +108,9 @@ static void start_target(App* app, int idx) {
     t->stats_avg = 0; t->stats_min = 0; t->stats_max = 0;
     t->running = 1;
 
-    if (points_before > 0 && app->chart.max_points > 0) {
-        int max = app->chart.max_points < MAX_POINTS ? app->chart.max_points : MAX_POINTS;
-        ChartPoint* temp = (ChartPoint*)SDL_malloc(sizeof(ChartPoint) * max);
-        if (temp) {
-            int write = 0;
-            for (int i = 0; i < app->chart.count; i++) {
-                int pi = (app->chart.head + i) % app->chart.max_points;
-                if (app->chart.points[pi].target_index != idx) {
-                    temp[write++] = app->chart.points[pi];
-                }
-            }
-            app->chart.head = 0;
-            app->chart.count = write;
-            memcpy(app->chart.points, temp, sizeof(ChartPoint) * write);
-            SDL_free(temp);
-        }
-    }
+    SDL_LockMutex(app->mutex);
+    chart_remove_points_for_target(&app->chart, idx);
+    SDL_UnlockMutex(app->mutex);
 
     ThreadCtx* ctx = (ThreadCtx*)SDL_malloc(sizeof(ThreadCtx));
     ctx->app = app;
@@ -195,6 +175,7 @@ void app_init(App* app, const AppConfig* cfg) {
     app->mutex = SDL_CreateMutex();
 
     chart_init(&app->chart, app->max_points);
+    app->max_points = app->chart.max_points;
 
     for (int i = 0; i < app->target_count; i++) {
         PingTarget* t = &app->targets[i];
@@ -216,6 +197,8 @@ void app_shutdown(App* app) {
             t->thread = NULL;
         }
     }
+    chart_shutdown(&app->chart);
+
     if (app->mutex) {
         SDL_DestroyMutex(app->mutex);
         app->mutex = NULL;
@@ -246,11 +229,9 @@ void app_remove_target(App* app, int idx) {
         stop_target(app, idx);
     }
 
-    int points_before = 0;
-    for (int i = 0; i < app->chart.count; i++) {
-        int pi = (app->chart.head + i) % app->chart.max_points;
-        if (app->chart.points[pi].target_index == idx) points_before++;
-    }
+    SDL_LockMutex(app->mutex);
+    chart_remove_target_and_shift(&app->chart, idx);
+    SDL_UnlockMutex(app->mutex);
 
     for (int i = idx; i < app->target_count - 1; i++) {
         memcpy(&app->targets[i], &app->targets[i + 1], sizeof(PingTarget));
@@ -258,24 +239,6 @@ void app_remove_target(App* app, int idx) {
     memset(&app->targets[app->target_count - 1], 0, sizeof(PingTarget));
     app->target_count--;
 
-    if (points_before > 0 && app->chart.max_points > 0) {
-        int max = app->chart.max_points < MAX_POINTS ? app->chart.max_points : MAX_POINTS;
-        ChartPoint* temp = (ChartPoint*)SDL_malloc(sizeof(ChartPoint) * max);
-        if (temp) {
-            int write = 0;
-            for (int i = 0; i < app->chart.count; i++) {
-                int pi = (app->chart.head + i) % app->chart.max_points;
-                int ti = app->chart.points[pi].target_index;
-                if (ti == idx) continue;
-                if (ti > idx) app->chart.points[pi].target_index--;
-                temp[write++] = app->chart.points[pi];
-            }
-            app->chart.head = 0;
-            app->chart.count = write;
-            memcpy(app->chart.points, temp, sizeof(ChartPoint) * write);
-            SDL_free(temp);
-        }
-    }
     app->config_dirty = 1;
 }
 
@@ -302,6 +265,10 @@ void app_render(App* app) {
     ImGui::SetNextItemWidth(50.0f);
     if (ImGui::InputInt("##rolling_avg", &app->rolling_avg, 0, 0)) {
         if (app->rolling_avg < 1) app->rolling_avg = 1;
+        if (app->rolling_avg > MAX_RAW_PINGS) app->rolling_avg = MAX_RAW_PINGS;
+        SDL_LockMutex(app->mutex);
+        for (int i = 0; i < app->target_count; i++) app->targets[i].raw_count = 0;
+        SDL_UnlockMutex(app->mutex);
         app->config_dirty = 1;
     }
 
@@ -311,9 +278,15 @@ void app_render(App* app) {
     ImGui::SetNextItemWidth(50.0f);
     if (ImGui::InputInt("##max_points", &app->max_points, 0, 0)) {
         if (app->max_points < 5) app->max_points = 5;
-        if (app->max_points > 512) app->max_points = 512;
-        app->chart.max_points = app->max_points;
-        app->config_dirty = 1;
+        if (app->max_points > MAX_POINTS) app->max_points = MAX_POINTS;
+        SDL_LockMutex(app->mutex);
+        int resized = chart_resize(&app->chart, app->max_points);
+        SDL_UnlockMutex(app->mutex);
+        if (!resized) {
+            app->max_points = app->chart.max_points;
+        } else {
+            app->config_dirty = 1;
+        }
     }
 
     ImGui::SameLine(0, gap);
@@ -371,21 +344,7 @@ void app_render(App* app) {
         if (ImGui::Button("Reset", ImVec2(btn_w, 0))) {
             SDL_LockMutex(app->mutex);
 
-            int max = app->chart.max_points < MAX_POINTS ? app->chart.max_points : MAX_POINTS;
-            ChartPoint* temp = (ChartPoint*)SDL_malloc(sizeof(ChartPoint) * max);
-            if (temp && app->chart.max_points > 0) {
-                int write = 0;
-                for (int j = 0; j < app->chart.count; j++) {
-                    int pj = (app->chart.head + j) % app->chart.max_points;
-                    if (app->chart.points[pj].target_index != i) {
-                        temp[write++] = app->chart.points[pj];
-                    }
-                }
-                app->chart.head = 0;
-                app->chart.count = write;
-                memcpy(app->chart.points, temp, sizeof(ChartPoint) * write);
-                SDL_free(temp);
-            }
+            chart_remove_points_for_target(&app->chart, i);
 
             t->raw_count = 0;
             t->valid_count = 0; t->has_stats = 0; t->lost_count = 0;
@@ -424,7 +383,9 @@ void app_render(App* app) {
     }
 
     ImVec2 chart_size = ImVec2(ImGui::GetContentRegionAvail().x, chart_h);
+    SDL_LockMutex(app->mutex);
     chart_render(&app->chart, app->target_count, target_ips, target_stats, chart_size, app->dark_mode, app->use_mean);
+    SDL_UnlockMutex(app->mutex);
 
     ImGui::End();
 

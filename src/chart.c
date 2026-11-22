@@ -47,16 +47,56 @@ static int chart_idx(const ChartData* chart, int i) {
 
 void chart_init(ChartData* chart, int max_points) {
     memset(chart, 0, sizeof(ChartData));
+    if (max_points < 5) max_points = 5;
+    if (max_points > MAX_POINTS) max_points = MAX_POINTS;
+    chart->points = (ChartPoint*)calloc((size_t)max_points, sizeof(ChartPoint));
+    if (!chart->points) {
+        chart->max_points = 0;
+        return;
+    }
     chart->max_points = max_points;
 }
 
-static void compute_point_stats(ChartPoint* p) {
-    double sorted[MAX_HISTORY_VALUES];
+void chart_shutdown(ChartData* chart) {
+    free(chart->points);
+    chart->points = NULL;
+    chart->count = 0;
+    chart->max_points = 0;
+    chart->head = 0;
+    chart->next_round = 0;
+}
+
+int chart_resize(ChartData* chart, int new_max_points) {
+    if (new_max_points < 5) new_max_points = 5;
+    if (new_max_points > MAX_POINTS) new_max_points = MAX_POINTS;
+    if (new_max_points == chart->max_points) return 1;
+
+    ChartPoint* new_points = (ChartPoint*)calloc((size_t)new_max_points, sizeof(ChartPoint));
+    if (!new_points) return 0;
+
+    int keep = chart->count < new_max_points ? chart->count : new_max_points;
+    int first = chart->count - keep;
+    for (int i = 0; i < keep; i++) {
+        int src = (chart->head + first + i) % chart->max_points;
+        new_points[i] = chart->points[src];
+    }
+
+    free(chart->points);
+    chart->points = new_points;
+    chart->max_points = new_max_points;
+    chart->count = keep;
+    chart->head = 0;
+    return 1;
+}
+
+static void compute_point_stats(ChartPoint* p, const double* raw_values, int raw_count) {
+    double sorted[MAX_SAMPLE_VALUES];
     int n = 0;
     int timeouts = 0;
 
-    for (int h = 0; h < p->history_count; h++) {
-        double v = p->history_raw[h];
+    if (raw_count > MAX_SAMPLE_VALUES) raw_count = MAX_SAMPLE_VALUES;
+    for (int h = 0; h < raw_count; h++) {
+        double v = raw_values[h];
         if (v < 0) timeouts++;
         else sorted[n++] = v;
     }
@@ -106,7 +146,7 @@ static void compute_point_stats(ChartPoint* p) {
 
 int chart_add_point(ChartData* chart, int target_index, double avg_ping,
                     const double* raw_values, int raw_count, const char* timestamp) {
-    if (chart->max_points <= 0) return 0;
+    if (chart->max_points <= 0 || !chart->points) return 0;
     int idx;
     if (chart->count >= chart->max_points) {
         idx = chart->head;
@@ -119,9 +159,7 @@ int chart_add_point(ChartData* chart, int target_index, double avg_ping,
     p->target_index = target_index;
     p->round = chart->next_round++;
     p->avg_ping = avg_ping;
-    p->history_count = raw_count < MAX_HISTORY_VALUES ? raw_count : MAX_HISTORY_VALUES;
-    memcpy(p->history_raw, raw_values, sizeof(double) * p->history_count);
-    compute_point_stats(p);
+    compute_point_stats(p, raw_values, raw_count);
     if (timestamp) {
         strncpy(p->timestamp, timestamp, sizeof(p->timestamp) - 1);
         p->timestamp[sizeof(p->timestamp) - 1] = '\0';
@@ -135,6 +173,38 @@ void chart_clear(ChartData* chart) {
     chart->count = 0;
     chart->head = 0;
     chart->next_round = 0;
+}
+
+static void chart_compact(ChartData* chart, int target_index, int shift) {
+    if (!chart->points || chart->max_points <= 0 || chart->count <= 0) return;
+
+    ChartPoint* temp = (ChartPoint*)malloc(sizeof(ChartPoint) * (size_t)chart->count);
+    if (!temp) {
+        chart_clear(chart);
+        return;
+    }
+
+    int write = 0;
+    for (int i = 0; i < chart->count; i++) {
+        int idx = (chart->head + i) % chart->max_points;
+        ChartPoint pt = chart->points[idx];
+        if (pt.target_index == target_index) continue;
+        if (shift && pt.target_index > target_index) pt.target_index--;
+        temp[write++] = pt;
+    }
+
+    memcpy(chart->points, temp, sizeof(ChartPoint) * (size_t)write);
+    free(temp);
+    chart->head = 0;
+    chart->count = write;
+}
+
+void chart_remove_points_for_target(ChartData* chart, int target_index) {
+    chart_compact(chart, target_index, 0);
+}
+
+void chart_remove_target_and_shift(ChartData* chart, int target_index) {
+    chart_compact(chart, target_index, 1);
 }
 
 void chart_render(const ChartData* chart, int target_count, const char* const* target_ips,

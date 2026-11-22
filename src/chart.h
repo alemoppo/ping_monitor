@@ -7,7 +7,8 @@
 extern "C" {
 #endif
 
-#define MAX_HISTORY_VALUES 64
+/* Upper bound for the number of raw samples used to build one chart point. */
+#define MAX_SAMPLE_VALUES 512
 #define MAX_POINTS 512
 
 typedef struct {
@@ -23,8 +24,6 @@ typedef struct {
     int target_index;
     int round;
     double avg_ping;
-    double history_raw[MAX_HISTORY_VALUES];
-    int history_count;
     char timestamp[16];
 
     /* Precomputed aggregates (updated once per inserted point, not per frame) */
@@ -40,7 +39,7 @@ typedef struct {
 } ChartPoint;
 
 typedef struct {
-    ChartPoint points[MAX_POINTS];
+    ChartPoint* points;
     int count;
     int max_points;
     int head;
@@ -48,9 +47,15 @@ typedef struct {
 } ChartData;
 
 void chart_init(ChartData* chart, int max_points);
+void chart_shutdown(ChartData* chart);
+int chart_resize(ChartData* chart, int new_max_points);
 int chart_add_point(ChartData* chart, int target_index, double avg_ping,
                     const double* raw_values, int raw_count, const char* timestamp);
 void chart_clear(ChartData* chart);
+/* Remove all points belonging to a target. Caller must hold the app mutex. */
+void chart_remove_points_for_target(ChartData* chart, int target_index);
+/* Remove a target's points and shift higher target indices down by one. */
+void chart_remove_target_and_shift(ChartData* chart, int target_index);
 void chart_render(const ChartData* chart, int target_count, const char* const* target_ips,
                   const TargetStats* stats, ImVec2 size, int dark, int use_mean);
 
