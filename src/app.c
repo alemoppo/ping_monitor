@@ -29,7 +29,6 @@ static int ping_thread_func(void* data) {
         }
         memcpy(ip, t->ip, sizeof(ip));
         interval = t->interval;
-        int rolling_avg = app->rolling_avg;
         SDL_UnlockMutex(app->mutex);
 
         double ms = 0;
@@ -44,6 +43,8 @@ static int ping_thread_func(void* data) {
             SDL_UnlockMutex(app->mutex);
             return 0;
         }
+
+        int rolling_avg = app->rolling_avg;
 
         if (t->raw_count < MAX_RAW_PINGS) {
             t->raw_pings[t->raw_count++] = (ret == 0) ? ms : -1.0;
@@ -113,9 +114,17 @@ static void start_target(App* app, int idx) {
     SDL_UnlockMutex(app->mutex);
 
     ThreadCtx* ctx = (ThreadCtx*)SDL_malloc(sizeof(ThreadCtx));
+    if (!ctx) {
+        t->running = 0;
+        return;
+    }
     ctx->app = app;
     ctx->index = idx;
     t->thread = SDL_CreateThread(ping_thread_func, "ping_thread", ctx);
+    if (!t->thread) {
+        SDL_free(ctx);
+        t->running = 0;
+    }
 }
 
 static void stop_target(App* app, int idx) {
@@ -164,7 +173,7 @@ static void start_or_resolve_target(App* app, int idx) {
     }
 }
 
-void app_init(App* app, const AppConfig* cfg) {
+int app_init(App* app, const AppConfig* cfg) {
     memset(app, 0, sizeof(App));
     app->target_count = cfg->target_count;
     app->max_points = cfg->max_points;
@@ -173,8 +182,9 @@ void app_init(App* app, const AppConfig* cfg) {
     app->use_mean = cfg->use_mean;
     app->config_dirty = 0;
     app->mutex = SDL_CreateMutex();
+    if (!app->mutex) return 0;
 
-    chart_init(&app->chart, app->max_points);
+    if (!chart_init(&app->chart, app->max_points)) return 0;
     app->max_points = app->chart.max_points;
 
     for (int i = 0; i < app->target_count; i++) {
@@ -184,6 +194,7 @@ void app_init(App* app, const AppConfig* cfg) {
         t->interval = cfg->targets[i].interval > 0 ? cfg->targets[i].interval : 0.5f;
         t->use_icmp = cfg->targets[i].use_icmp;
     }
+    return 1;
 }
 
 void app_shutdown(App* app) {
@@ -225,19 +236,31 @@ void app_add_target(App* app) {
 void app_remove_target(App* app, int idx) {
     if (app->target_count <= 1 || idx < 0 || idx >= app->target_count) return;
 
-    if (app->targets[idx].running) {
-        stop_target(app, idx);
+    int running_before[MAX_TARGETS];
+    for (int i = idx; i < app->target_count; i++) {
+        running_before[i] = app->targets[i].running;
+        if (running_before[i]) stop_target(app, i);
     }
 
     SDL_LockMutex(app->mutex);
-    chart_remove_target_and_shift(&app->chart, idx);
+    int ok = chart_remove_target_and_shift(&app->chart, idx);
     SDL_UnlockMutex(app->mutex);
+    if (!ok) {
+        for (int i = idx; i < app->target_count; i++) {
+            if (running_before[i]) start_or_resolve_target(app, i);
+        }
+        return;
+    }
 
     for (int i = idx; i < app->target_count - 1; i++) {
         memcpy(&app->targets[i], &app->targets[i + 1], sizeof(PingTarget));
     }
     memset(&app->targets[app->target_count - 1], 0, sizeof(PingTarget));
     app->target_count--;
+
+    for (int i = idx; i < app->target_count; i++) {
+        if (running_before[i + 1]) start_or_resolve_target(app, i);
+    }
 
     app->config_dirty = 1;
 }
@@ -372,6 +395,7 @@ void app_render(App* app) {
 
     const char* target_ips[MAX_TARGETS];
     TargetStats target_stats[MAX_TARGETS];
+    SDL_LockMutex(app->mutex);
     for (int t = 0; t < app->target_count; t++) {
         target_ips[t] = app->targets[t].ip;
         target_stats[t].avg = app->targets[t].stats_avg;
@@ -381,9 +405,7 @@ void app_render(App* app) {
         target_stats[t].total = app->targets[t].valid_count + app->targets[t].lost_count;
         target_stats[t].active = app->targets[t].has_stats;
     }
-
     ImVec2 chart_size = ImVec2(ImGui::GetContentRegionAvail().x, chart_h);
-    SDL_LockMutex(app->mutex);
     chart_render(&app->chart, app->target_count, target_ips, target_stats, chart_size, app->dark_mode, app->use_mean);
     SDL_UnlockMutex(app->mutex);
 

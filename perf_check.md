@@ -75,10 +75,34 @@ Non emerge la necessità di un limite a 30 FPS o di ottimizzazioni CPU urgenti.
 Con 30 punti la memoria del grafico passa da ~317 KB a ~4 KB.
 Test di unità su init/add/resize/remove/shutdown: OK.
 
+## Ottimizzazioni applicate (fase 3, su indicazione ChatGPT)
+1. **Snapshot `target_stats` sotto mutex** in `app_render`: elimina la data
+   race su `stats_avg/min/max/lost_count`.
+2. **`rolling_avg` letto dopo il ping**, dentro il secondo lock: il thread
+   usa sempre il valore corrente.
+3. **`app_remove_target`**: ferma anche i thread con indice superiore, poi
+   rimuove, poi li riavvia agli indici aggiornati. Evita associazione errata
+   tra thread, target e grafico.
+4. **`chart_compact` restituisce `int`**; in caso di fallimento della
+   compattazione non cancella i dati. `app_remove_target` abortisce la
+   rimozione se la compattazione fallisce.
+5. **`chart_init`/`app_init` restituiscono `int`**; gestito il fallimento
+   di `SDL_CreateMutex` e di `chart_init` in `main()`.
+6. **`SDL_CreateThread` failure**: `ctx` liberato e `t->running` ripristinato.
+7. **`MAX_SAMPLE_VALUES` rimosso**: si usa `MAX_RAW_PINGS` (definito in
+   `config.h`) come unico limite condiviso.
+
 ## Ottimizzazioni suggerite ma non applicate
 - Riutilizzo dell'handle ICMP per thread (priorità bassa).
 - Limite a 30 FPS (non necessario: CPU ~5% di un core).
 - Passaggio da double a float (guadagno ~130 KB, non prioritario).
+
+## Note di discussione con ChatGPT
+- Il suggerimento di compattazione in-place con copia in avanti è stato
+  corretto: non è sicuro con buffer circolare avvolto (controesempio
+  documentato). Mantenuto il buffer temporaneo.
+- Confermato che il lock attorno a `chart_render` non è sufficiente per
+  `target_stats`: spostata la costruzione sotto mutex.
 
 ## Prossimi passi consigliati
 1. Misurare CPU con ping attivi su 4 target.

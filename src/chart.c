@@ -45,16 +45,17 @@ static int chart_idx(const ChartData* chart, int i) {
     return (chart->head + i) % chart->max_points;
 }
 
-void chart_init(ChartData* chart, int max_points) {
+int chart_init(ChartData* chart, int max_points) {
     memset(chart, 0, sizeof(ChartData));
     if (max_points < 5) max_points = 5;
     if (max_points > MAX_POINTS) max_points = MAX_POINTS;
     chart->points = (ChartPoint*)calloc((size_t)max_points, sizeof(ChartPoint));
     if (!chart->points) {
         chart->max_points = 0;
-        return;
+        return 0;
     }
     chart->max_points = max_points;
+    return 1;
 }
 
 void chart_shutdown(ChartData* chart) {
@@ -90,11 +91,11 @@ int chart_resize(ChartData* chart, int new_max_points) {
 }
 
 static void compute_point_stats(ChartPoint* p, const double* raw_values, int raw_count) {
-    double sorted[MAX_SAMPLE_VALUES];
+    double sorted[MAX_RAW_PINGS];
     int n = 0;
     int timeouts = 0;
 
-    if (raw_count > MAX_SAMPLE_VALUES) raw_count = MAX_SAMPLE_VALUES;
+    if (raw_count > MAX_RAW_PINGS) raw_count = MAX_RAW_PINGS;
     for (int h = 0; h < raw_count; h++) {
         double v = raw_values[h];
         if (v < 0) timeouts++;
@@ -175,14 +176,11 @@ void chart_clear(ChartData* chart) {
     chart->next_round = 0;
 }
 
-static void chart_compact(ChartData* chart, int target_index, int shift) {
-    if (!chart->points || chart->max_points <= 0 || chart->count <= 0) return;
+static int chart_compact(ChartData* chart, int target_index, int shift) {
+    if (!chart->points || chart->max_points <= 0 || chart->count <= 0) return 1;
 
     ChartPoint* temp = (ChartPoint*)malloc(sizeof(ChartPoint) * (size_t)chart->count);
-    if (!temp) {
-        chart_clear(chart);
-        return;
-    }
+    if (!temp) return 0;
 
     int write = 0;
     for (int i = 0; i < chart->count; i++) {
@@ -197,14 +195,15 @@ static void chart_compact(ChartData* chart, int target_index, int shift) {
     free(temp);
     chart->head = 0;
     chart->count = write;
+    return 1;
 }
 
-void chart_remove_points_for_target(ChartData* chart, int target_index) {
-    chart_compact(chart, target_index, 0);
+int chart_remove_points_for_target(ChartData* chart, int target_index) {
+    return chart_compact(chart, target_index, 0);
 }
 
-void chart_remove_target_and_shift(ChartData* chart, int target_index) {
-    chart_compact(chart, target_index, 1);
+int chart_remove_target_and_shift(ChartData* chart, int target_index) {
+    return chart_compact(chart, target_index, 1);
 }
 
 void chart_render(const ChartData* chart, int target_count, const char* const* target_ips,

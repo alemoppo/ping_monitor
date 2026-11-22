@@ -96,7 +96,12 @@ int main(int argc, char* argv[]) {
         SDL_Quit();
         return 1;
     }
-    app_init(app, &cfg);
+    if (!app_init(app, &cfg)) {
+        fprintf(stderr, "Failed to initialize application\n");
+        free(app);
+        SDL_Quit();
+        return 1;
+    }
     app->window = window;
 
     int prev_dark = app->dark_mode;

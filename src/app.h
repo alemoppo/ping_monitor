@@ -47,7 +47,7 @@ typedef struct {
     int config_dirty;
 } App;
 
-void app_init(App* app, const AppConfig* cfg);
+int app_init(App* app, const AppConfig* cfg);
 void app_shutdown(App* app);
 void app_render(App* app);
 void app_toggle_theme(App* app);
