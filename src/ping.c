@@ -39,8 +39,12 @@ int do_ping_icmp(const char* ip, double* ms_out) {
 }
 
 int do_ping_legacy(const char* ip, double* ms_out) {
+    if (!ip || !ip[0]) return -1;
+    for (const char* p = ip; *p; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '-' || *p == '"' || *p == '\'') return -1;
+    }
     char cmd[256];
-    snprintf(cmd, sizeof(cmd), "ping -n 1 -w 3000 %s", ip);
+    snprintf(cmd, sizeof(cmd), "%s\\System32\\ping.exe -n 1 -w 3000 %s", getenv("SystemRoot") ? getenv("SystemRoot") : "C:\\Windows", ip);
 
     HANDLE hRead, hWrite;
     SECURITY_ATTRIBUTES sa;

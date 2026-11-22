@@ -94,7 +94,20 @@ static int ping_thread_func(void* data) {
         }
         SDL_UnlockMutex(app->mutex);
 
-        SDL_Delay((Uint32)(interval * 1000.0f));
+        Uint32 delay_ms = (Uint32)(interval * 1000.0f);
+        Uint32 elapsed = 0;
+        while (elapsed < delay_ms) {
+            Uint32 chunk = delay_ms - elapsed;
+            if (chunk > 50) chunk = 50;
+            SDL_Delay(chunk);
+            elapsed += chunk;
+            SDL_LockMutex(app->mutex);
+            if (t->pending_stop) {
+                SDL_UnlockMutex(app->mutex);
+                return 0;
+            }
+            SDL_UnlockMutex(app->mutex);
+        }
     }
     return 0;
 }

@@ -307,13 +307,13 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
     int span = max_round - min_round;
     if (span < 1) span = 1;
 
-    double global_max = 10.0;
+    double m = 0.0;
     for (int i = 0; i < chart->count; i++) {
         const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
-        if (pt->valid_count > 0 && pt->valid_max > global_max)
-            global_max = pt->valid_max;
+        if (pt->valid_count > 0 && pt->valid_max > m)
+            m = pt->valid_max;
     }
-    global_max *= 1.1;
+    double global_max = m * 1.1;
     if (global_max < 10.0) global_max = 10.0;
     if (global_max < 10.0) global_max = 10.0;
 
@@ -364,14 +364,14 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
             if (valid_count == 1) {
                 use_val = pt->median_ping;
             } else if (valid_count >= 2) {
-                use_val = (use_mean && pt->avg_ping > 0) ? pt->avg_ping : pt->median_ping;
+                use_val = (use_mean && pt->avg_ping >= 0) ? pt->avg_ping : pt->median_ping;
             }
 
-            if (has_prev && use_val > 0) {
+            if (has_prev && use_val >= 0) {
                 ImU32 line_col = has_timeout ? timeout_seg_col : ping_color(use_val, col);
                 dl->AddLine(ImVec2(prev_x, val_to_y(prev_use_val)), ImVec2(x, val_to_y(use_val)), line_col, 2.0f);
             }
-            if (use_val > 0) {
+            if (use_val >= 0) {
                 has_prev = 1;
                 prev_use_val = use_val;
                 prev_x = x;
