@@ -18,6 +18,7 @@ static int ping_thread_func(void* data) {
 
     char ip[128];
     float interval;
+    int use_icmp;
 
     while (1) {
         SDL_LockMutex(app->mutex);
@@ -29,11 +30,12 @@ static int ping_thread_func(void* data) {
         }
         memcpy(ip, t->ip, sizeof(ip));
         interval = t->interval;
+        use_icmp = t->use_icmp;
         SDL_UnlockMutex(app->mutex);
 
         double ms = 0;
         int ret;
-        if (t->use_icmp)
+        if (use_icmp)
             ret = do_ping_icmp(ip, &ms);
         else
             ret = do_ping_legacy(ip, &ms);
@@ -110,8 +112,13 @@ static void start_target(App* app, int idx) {
     t->running = 1;
 
     SDL_LockMutex(app->mutex);
-    chart_remove_points_for_target(&app->chart, idx);
+    int compact_ok = chart_remove_points_for_target(&app->chart, idx);
     SDL_UnlockMutex(app->mutex);
+
+    if (!compact_ok) {
+        t->running = 0;
+        return;
+    }
 
     ThreadCtx* ctx = (ThreadCtx*)SDL_malloc(sizeof(ThreadCtx));
     if (!ctx) {
@@ -174,6 +181,9 @@ static void start_or_resolve_target(App* app, int idx) {
 }
 
 int app_init(App* app, const AppConfig* cfg) {
+    if (!app || !cfg) return 0;
+    if (cfg->target_count < 1 || cfg->target_count > MAX_TARGETS) return 0;
+
     memset(app, 0, sizeof(App));
     app->target_count = cfg->target_count;
     app->max_points = cfg->max_points;
@@ -184,7 +194,11 @@ int app_init(App* app, const AppConfig* cfg) {
     app->mutex = SDL_CreateMutex();
     if (!app->mutex) return 0;
 
-    if (!chart_init(&app->chart, app->max_points)) return 0;
+    if (!chart_init(&app->chart, app->max_points)) {
+        SDL_DestroyMutex(app->mutex);
+        app->mutex = NULL;
+        return 0;
+    }
     app->max_points = app->chart.max_points;
 
     for (int i = 0; i < app->target_count; i++) {
@@ -286,10 +300,12 @@ void app_render(App* app) {
     ImGui::Text("Media su N ping:");
     ImGui::SameLine(0, gap);
     ImGui::SetNextItemWidth(50.0f);
-    if (ImGui::InputInt("##rolling_avg", &app->rolling_avg, 0, 0)) {
-        if (app->rolling_avg < 1) app->rolling_avg = 1;
-        if (app->rolling_avg > MAX_RAW_PINGS) app->rolling_avg = MAX_RAW_PINGS;
+    int rolling_avg_val = app->rolling_avg;
+    if (ImGui::InputInt("##rolling_avg", &rolling_avg_val, 0, 0)) {
+        if (rolling_avg_val < 1) rolling_avg_val = 1;
+        if (rolling_avg_val > MAX_RAW_PINGS) rolling_avg_val = MAX_RAW_PINGS;
         SDL_LockMutex(app->mutex);
+        app->rolling_avg = rolling_avg_val;
         for (int i = 0; i < app->target_count; i++) app->targets[i].raw_count = 0;
         SDL_UnlockMutex(app->mutex);
         app->config_dirty = 1;
@@ -333,14 +349,25 @@ void app_render(App* app) {
 
         snprintf(id_buf, sizeof(id_buf), "##ip%d", i);
         ImGui::SetNextItemWidth(item_w);
-        ImGui::InputText(id_buf, t->ip, sizeof(t->ip), 0);
-        if (ImGui::IsItemDeactivatedAfterEdit()) app->config_dirty = 1;
+        char ip_buf[128];
+        strncpy(ip_buf, t->ip, sizeof(ip_buf) - 1);
+        ip_buf[sizeof(ip_buf) - 1] = '\0';
+        ImGui::InputText(id_buf, ip_buf, sizeof(ip_buf), 0);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            SDL_LockMutex(app->mutex);
+            strncpy(t->ip, ip_buf, sizeof(t->ip) - 1);
+            t->ip[sizeof(t->ip) - 1] = '\0';
+            SDL_UnlockMutex(app->mutex);
+            app->config_dirty = 1;
+        }
         ImGui::SameLine(0, 4.0f);
 
         bool icmp_val = (t->use_icmp != 0);
         snprintf(id_buf, sizeof(id_buf), "ICMP##icmp%d", i);
         if (ImGui::Checkbox(id_buf, &icmp_val)) {
+            SDL_LockMutex(app->mutex);
             t->use_icmp = icmp_val ? 1 : 0;
+            SDL_UnlockMutex(app->mutex);
             app->config_dirty = 1;
         }
         if (ImGui::IsItemHovered())
@@ -349,12 +376,22 @@ void app_render(App* app) {
 
         snprintf(id_buf, sizeof(id_buf), "##int%d", i);
         ImGui::SetNextItemWidth(80.0f);
-        ImGui::InputFloat(id_buf, &t->interval, 0.1f, 0.5f, "%.1f");
-        if (t->interval < 0.1f) t->interval = 0.1f;
-        if (ImGui::IsItemDeactivatedAfterEdit()) app->config_dirty = 1;
+        float interval_val = t->interval;
+        ImGui::InputFloat(id_buf, &interval_val, 0.1f, 0.5f, "%.1f");
+        if (interval_val < 0.1f) interval_val = 0.1f;
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            SDL_LockMutex(app->mutex);
+            t->interval = interval_val;
+            SDL_UnlockMutex(app->mutex);
+            app->config_dirty = 1;
+        }
         ImGui::SameLine(0, gap);
 
-        if (t->running) {
+        int is_running;
+        SDL_LockMutex(app->mutex);
+        is_running = t->running;
+        SDL_UnlockMutex(app->mutex);
+        if (is_running) {
             ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(200, 50, 50, 255));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(220, 70, 70, 255));
             if (ImGui::Button("Stop", ImVec2(btn_w, 0))) stop_target(app, i);

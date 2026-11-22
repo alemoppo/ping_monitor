@@ -8,8 +8,7 @@
 extern "C" {
 #endif
 
-/* Upper bound for the number of raw samples used to build one chart point
-   (must match MAX_RAW_PINGS). */
+/* Maximum number of chart points that can be stored. */
 #define MAX_POINTS 512
 
 typedef struct {

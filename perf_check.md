@@ -92,10 +92,37 @@ Test di unità su init/add/resize/remove/shutdown: OK.
 7. **`MAX_SAMPLE_VALUES` rimosso**: si usa `MAX_RAW_PINGS` (definito in
    `config.h`) come unico limite condiviso.
 
+## Ottimizzazioni applicate (fase 3, su indicazione ChatGPT)
+1. **`chart_compact` restituisce `int`**; in caso di fallimento della
+   compattazione non cancella i dati. `app_remove_target` abortisce la
+   rimozione se la compattazione fallisce.
+2. **`chart_init`/`app_init` restituiscono `int`**; gestito il fallimento
+   di `SDL_CreateMutex` e di `chart_init` in `main()`.
+3. **`SDL_CreateThread` failure**: `ctx` liberato e `t->running` ripristinato.
+4. **`MAX_SAMPLE_VALUES` rimosso**: si usa `MAX_RAW_PINGS` (definito in
+   `config.h`) come unico limite condiviso.
+
+## Ottimizzazioni applicate (fase 4, code review ChatGPT)
+1. **Thread safety su campi GUI**: `ip`, `interval`, `use_icmp`, `rolling_avg`
+   e `running` ora usano copie locali e commit sotto mutex.
+2. **`use_icmp` copiato nel thread** sotto mutex insieme a `ip` e `interval`.
+3. **`chart_init`/`chart_resize`** con controllo iniziale su oggetto non
+   inizializzato.
+4. **`chart_add_point`** valida `raw_values` e `raw_count`.
+5. **`app_init`** valida `cfg` e `target_count`.
+6. **Commento** in `chart.h` corretto.
+
 ## Ottimizzazioni suggerite ma non applicate
 - Riutilizzo dell'handle ICMP per thread (priorità bassa).
 - Limite a 30 FPS (non necessario: CPU ~5% di un core).
 - Passaggio da double a float (guadagno ~130 KB, non prioritario).
+
+## Note di discussione con ChatGPT
+- Il suggerimento di compattazione in-place con copia in avanti è stato
+  corretto: non è sicuro con buffer circolare avvolto (controesempio
+  documentato). Mantenuto il buffer temporaneo.
+- Confermato che il lock attorno a `chart_render` non è sufficiente per
+  `target_stats`: spostata la costruzione sotto mutex.
 
 ## Note di discussione con ChatGPT
 - Il suggerimento di compattazione in-place con copia in avanti è stato

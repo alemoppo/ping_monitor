@@ -68,6 +68,7 @@ void chart_shutdown(ChartData* chart) {
 }
 
 int chart_resize(ChartData* chart, int new_max_points) {
+    if (!chart || chart->max_points <= 0 || !chart->points) return 0;
     if (new_max_points < 5) new_max_points = 5;
     if (new_max_points > MAX_POINTS) new_max_points = MAX_POINTS;
     if (new_max_points == chart->max_points) return 1;
@@ -148,6 +149,8 @@ static void compute_point_stats(ChartPoint* p, const double* raw_values, int raw
 int chart_add_point(ChartData* chart, int target_index, double avg_ping,
                     const double* raw_values, int raw_count, const char* timestamp) {
     if (chart->max_points <= 0 || !chart->points) return 0;
+    if (raw_count < 0 || (raw_count > 0 && !raw_values)) return 0;
+    if (raw_count > MAX_RAW_PINGS) raw_count = MAX_RAW_PINGS;
     int idx;
     if (chart->count >= chart->max_points) {
         idx = chart->head;
