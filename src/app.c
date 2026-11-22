@@ -149,32 +149,46 @@ static void start_or_resolve_target(App* app, int idx) {
     PingTarget* t = &app->targets[idx];
     if (t->running) return;
 
-    if (is_valid_ip(t->ip)) {
+    char ip[128];
+    int use_icmp;
+    SDL_LockMutex(app->mutex);
+    strncpy(ip, t->ip, sizeof(ip) - 1);
+    ip[sizeof(ip) - 1] = '\0';
+    use_icmp = t->use_icmp;
+    SDL_UnlockMutex(app->mutex);
+
+    if (is_valid_ip(ip)) {
         start_target(app, idx);
         return;
     }
 
     char ips[PROC_MAX_IPS][PROC_IP_LEN];
     int n = 0;
-    resolve_process_ips(t->ip, ips, &n);
+    resolve_process_ips(ip, ips, &n);
 
     if (n > 0) {
         int original_count = app->target_count;
-        memcpy(t->ip, ips[0], PROC_IP_LEN);
+        SDL_LockMutex(app->mutex);
+        strncpy(t->ip, ips[0], sizeof(t->ip) - 1);
+        t->ip[sizeof(t->ip) - 1] = '\0';
         for (int k = 1; k < n; k++) {
             if (app->target_count >= MAX_TARGETS) break;
             app_add_target(app);
             int ni = app->target_count - 1;
-            memcpy(app->targets[ni].ip, ips[k], PROC_IP_LEN);
-            app->targets[ni].use_icmp = t->use_icmp;
+            strncpy(app->targets[ni].ip, ips[k], sizeof(app->targets[ni].ip) - 1);
+            app->targets[ni].ip[sizeof(app->targets[ni].ip) - 1] = '\0';
+            app->targets[ni].use_icmp = use_icmp;
         }
+        SDL_UnlockMutex(app->mutex);
         app->config_dirty = 1;
         start_target(app, idx);
         for (int k = original_count; k < app->target_count; k++) {
             start_target(app, k);
         }
     } else {
+        SDL_LockMutex(app->mutex);
         t->use_icmp = 0;
+        SDL_UnlockMutex(app->mutex);
         app->config_dirty = 1;
         start_target(app, idx);
     }
@@ -183,6 +197,7 @@ static void start_or_resolve_target(App* app, int idx) {
 int app_init(App* app, const AppConfig* cfg) {
     if (!app || !cfg) return 0;
     if (cfg->target_count < 1 || cfg->target_count > MAX_TARGETS) return 0;
+    if (cfg->rolling_avg < 1 || cfg->rolling_avg > MAX_RAW_PINGS) return 0;
 
     memset(app, 0, sizeof(App));
     app->target_count = cfg->target_count;
@@ -261,7 +276,7 @@ void app_remove_target(App* app, int idx) {
     SDL_UnlockMutex(app->mutex);
     if (!ok) {
         for (int i = idx; i < app->target_count; i++) {
-            if (running_before[i]) start_or_resolve_target(app, i);
+            if (running_before[i]) start_target(app, i);
         }
         return;
     }
@@ -273,7 +288,7 @@ void app_remove_target(App* app, int idx) {
     app->target_count--;
 
     for (int i = idx; i < app->target_count; i++) {
-        if (running_before[i + 1]) start_or_resolve_target(app, i);
+        if (running_before[i + 1]) start_target(app, i);
     }
 
     app->config_dirty = 1;

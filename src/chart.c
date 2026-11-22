@@ -150,7 +150,7 @@ int chart_add_point(ChartData* chart, int target_index, double avg_ping,
                     const double* raw_values, int raw_count, const char* timestamp) {
     if (chart->max_points <= 0 || !chart->points) return 0;
     if (raw_count < 0 || (raw_count > 0 && !raw_values)) return 0;
-    if (raw_count > MAX_RAW_PINGS) raw_count = MAX_RAW_PINGS;
+    if (raw_count > MAX_RAW_PINGS) return 0;
     int idx;
     if (chart->count >= chart->max_points) {
         idx = chart->head;
