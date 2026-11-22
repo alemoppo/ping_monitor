@@ -20,6 +20,26 @@ riconducibile a runtime, SDL2, ImGui e soprattutto driver/contesto OpenGL.
 Il README dichiara 10-20 MB: la cifra non è comparabile con il Working Set
 misurato su questa macchina.
 
+## Misura CPU isolata (solo processo ping_monitor)
+
+Metodo: `Get-Process -Id <pid>.CPU` campionato ogni secondo per 15 s,
+calcolando il delta di tempo CPU del solo processo. Nessun dato di sistema
+globale è stato usato. Test con 4 target ICMP attivi (8.8.8.8, 1.1.1.1,
+9.9.9.9, 208.67.222.222, intervallo 0.5 s).
+
+| Metrica | Valore |
+|---|---|
+| CPU media (1 core) | ~4.98% |
+| CPU massima (1 core) | ~9.4% |
+| CPU media su 20 core logici | ~0.25% |
+| Working Set | ~81.2 MB |
+| Private Bytes | ~151.7 MB |
+| Thread | 15 |
+
+Conclusione: il carico CPU del processo è basso e stabile; il rendering
+VSync a 60 FPS è il contributo principale, i ping aggiungono poco.
+Non emerge la necessità di un limite a 30 FPS o di ottimizzazioni CPU urgenti.
+
 ## Analisi statica
 - Allocazioni dinamiche: SDL_malloc temporanei in start_target/remove_target
   (max 512 ChartPoint) — trascurabili.
