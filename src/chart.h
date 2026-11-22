@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 #define MAX_HISTORY_VALUES 64
-#define MAX_POINTS 2048
+#define MAX_POINTS 512
 
 typedef struct {
     double avg;
@@ -26,6 +26,17 @@ typedef struct {
     double history_raw[MAX_HISTORY_VALUES];
     int history_count;
     char timestamp[16];
+
+    /* Precomputed aggregates (updated once per inserted point, not per frame) */
+    double median_ping;
+    double q1_ping;
+    double q3_ping;
+    double valid_min;
+    double valid_max;
+    double sum_ping;
+    int valid_count;
+    int timeout_count;
+    int has_timeout;
 } ChartPoint;
 
 typedef struct {

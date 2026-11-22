@@ -50,6 +50,60 @@ void chart_init(ChartData* chart, int max_points) {
     chart->max_points = max_points;
 }
 
+static void compute_point_stats(ChartPoint* p) {
+    double sorted[MAX_HISTORY_VALUES];
+    int n = 0;
+    int timeouts = 0;
+
+    for (int h = 0; h < p->history_count; h++) {
+        double v = p->history_raw[h];
+        if (v < 0) timeouts++;
+        else sorted[n++] = v;
+    }
+
+    p->timeout_count = timeouts;
+    p->has_timeout = timeouts > 0;
+    p->valid_count = n;
+
+    if (n == 0) {
+        p->median_ping = -1.0;
+        p->q1_ping = 0.0;
+        p->q3_ping = 0.0;
+        p->valid_min = 0.0;
+        p->valid_max = 0.0;
+        p->sum_ping = 0.0;
+        return;
+    }
+
+    qsort(sorted, n, sizeof(double), cmp_double);
+
+    double sum = 0.0;
+    for (int i = 0; i < n; i++) sum += sorted[i];
+    p->sum_ping = sum;
+    p->valid_min = sorted[0];
+    p->valid_max = sorted[n - 1];
+    p->median_ping = (n & 1) ? sorted[n / 2]
+                             : (sorted[n / 2 - 1] + sorted[n / 2]) * 0.5;
+
+    if (n == 1) {
+        p->q1_ping = sorted[0];
+        p->q3_ping = sorted[0];
+        return;
+    }
+
+    double q1_idx = n * 0.25;
+    int q1_low = (int)q1_idx;
+    double q1_frac = q1_idx - q1_low;
+    if (q1_low >= n - 1) q1_low = n - 2;
+    p->q1_ping = sorted[q1_low] * (1.0 - q1_frac) + sorted[q1_low + 1] * q1_frac;
+
+    double q3_idx = n * 0.75;
+    int q3_low = (int)q3_idx;
+    double q3_frac = q3_idx - q3_low;
+    if (q3_low >= n - 1) q3_low = n - 2;
+    p->q3_ping = sorted[q3_low] * (1.0 - q3_frac) + sorted[q3_low + 1] * q3_frac;
+}
+
 int chart_add_point(ChartData* chart, int target_index, double avg_ping,
                     const double* raw_values, int raw_count, const char* timestamp) {
     if (chart->max_points <= 0) return 0;
@@ -67,6 +121,7 @@ int chart_add_point(ChartData* chart, int target_index, double avg_ping,
     p->avg_ping = avg_ping;
     p->history_count = raw_count < MAX_HISTORY_VALUES ? raw_count : MAX_HISTORY_VALUES;
     memcpy(p->history_raw, raw_values, sizeof(double) * p->history_count);
+    compute_point_stats(p);
     if (timestamp) {
         strncpy(p->timestamp, timestamp, sizeof(p->timestamp) - 1);
         p->timestamp[sizeof(p->timestamp) - 1] = '\0';
@@ -118,17 +173,13 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
         int t = pt->target_index;
         if (t >= target_count) continue;
         VisibleStats* v = &vis[t];
-        for (int h = 0; h < pt->history_count; h++) {
-            double val = pt->history_raw[h];
-            if (val < 0) {
-                v->lost++;
-            } else {
-                if (v->count == 0 || val < v->min) v->min = val;
-                if (v->count == 0 || val > v->max) v->max = val;
-                v->sum += val;
-                v->count++;
-            }
+        if (pt->valid_count > 0) {
+            if (v->count == 0 || pt->valid_min < v->min) v->min = pt->valid_min;
+            if (v->count == 0 || pt->valid_max > v->max) v->max = pt->valid_max;
+            v->sum += pt->sum_ping;
+            v->count += pt->valid_count;
         }
+        v->lost += pt->timeout_count;
     }
     float legend_y = p_min.y + 10.0f;
     float legend_x = p_min.x + margin_left;
@@ -185,10 +236,8 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
     double global_max = 10.0;
     for (int i = 0; i < chart->count; i++) {
         const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
-        for (int j = 0; j < pt->history_count; j++) {
-            double v = pt->history_raw[j];
-            if (v > 0 && v > global_max) global_max = v * 1.1;
-        }
+        if (pt->valid_count > 0 && pt->valid_max > global_max)
+            global_max = pt->valid_max * 1.1;
     }
     if (global_max < 10.0) global_max = 10.0;
 
@@ -232,24 +281,14 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
             if (pt->target_index != t) continue;
             float x = plot_min.x + (float)(pt->round - min_round) / span * plot_w;
 
-            int has_timeout = 0;
-            double valid_vals[MAX_HISTORY_VALUES] = {0};
-            int valid_count = 0;
-            for (int h = 0; h < pt->history_count; h++) {
-                double v = pt->history_raw[h];
-                if (v < 0) { has_timeout = 1; }
-                else { valid_vals[valid_count++] = v; }
-            }
+            int has_timeout = pt->has_timeout;
+            int valid_count = pt->valid_count;
 
             double use_val = -1;
             if (valid_count == 1) {
-                use_val = valid_vals[0];
+                use_val = pt->median_ping;
             } else if (valid_count >= 2) {
-                qsort(valid_vals, valid_count, sizeof(double), cmp_double);
-                double med = valid_count % 2 == 1
-                    ? valid_vals[valid_count / 2]
-                    : (valid_vals[valid_count / 2 - 1] + valid_vals[valid_count / 2]) * 0.5;
-                use_val = (use_mean && pt->avg_ping > 0) ? pt->avg_ping : med;
+                use_val = (use_mean && pt->avg_ping > 0) ? pt->avg_ping : pt->median_ping;
             }
 
             if (has_prev && use_val > 0) {
@@ -267,35 +306,19 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
             if (valid_count == 0 && has_timeout) {
                 draw_x(dl, x, val_to_y(0), 12.0f, timeout_col, 2.0f);
             } else if (valid_count == 1) {
-                float vy = val_to_y(valid_vals[0]);
+                float vy = val_to_y(pt->median_ping);
                 float half_w = box_w * 0.5f;
                 dl->AddRectFilled(ImVec2(x - half_w, vy - 2.5f), ImVec2(x + half_w, vy + 2.5f), box_fill);
                 if (has_timeout) {
                     draw_x(dl, x, vy, 12.0f, timeout_col, 2.0f);
                 } else {
-                    dl->AddCircleFilled(ImVec2(x, vy), 6.0f, ping_color(valid_vals[0], col));
+                    dl->AddCircleFilled(ImVec2(x, vy), 6.0f, ping_color(pt->median_ping, col));
                 }
             } else if (valid_count >= 2) {
-                double mn = valid_vals[0], mx = valid_vals[0];
-                for (int v = 0; v < valid_count; v++) {
-                    if (valid_vals[v] < mn) mn = valid_vals[v];
-                    if (valid_vals[v] > mx) mx = valid_vals[v];
-                }
-                double median = valid_count % 2 == 1
-                    ? valid_vals[valid_count / 2]
-                    : (valid_vals[valid_count / 2 - 1] + valid_vals[valid_count / 2]) * 0.5;
-
-                double q1_idx = valid_count * 0.25;
-                int q1_low = (int)q1_idx;
-                double q1_frac = q1_idx - q1_low;
-                if (q1_low >= valid_count - 1) q1_low = valid_count - 2;
-                double q1 = valid_vals[q1_low] * (1.0 - q1_frac) + valid_vals[q1_low + 1] * q1_frac;
-
-                double q3_idx = valid_count * 0.75;
-                int q3_low = (int)q3_idx;
-                double q3_frac = q3_idx - q3_low;
-                if (q3_low >= valid_count - 1) q3_low = valid_count - 2;
-                double q3 = valid_vals[q3_low] * (1.0 - q3_frac) + valid_vals[q3_low + 1] * q3_frac;
+                double mn = pt->valid_min, mx = pt->valid_max;
+                double median = pt->median_ping;
+                double q1 = pt->q1_ping;
+                double q3 = pt->q3_ping;
 
                 float y_q1 = val_to_y(q1), y_q3 = val_to_y(q3);
                 float y_med = val_to_y(median), y_min = val_to_y(mn), y_max = val_to_y(mx);

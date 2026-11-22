@@ -55,7 +55,10 @@ int main(int argc, char* argv[]) {
 
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
     SDL_GL_MakeCurrent(window, gl_context);
-    SDL_GL_SetSwapInterval(1);
+    if (SDL_GL_SetSwapInterval(1) != 0) {
+        SDL_Log("VSync non disponibile: %s", SDL_GetError());
+    }
+    SDL_Log("Swap interval effettivo: %d", SDL_GL_GetSwapInterval());
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
