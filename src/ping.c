@@ -10,7 +10,7 @@ static IPAddr parse_ip(const char* ip) {
     unsigned int a, b, c, d;
     if (sscanf(ip, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) return 0;
     if (a > 255 || b > 255 || c > 255 || d > 255) return 0;
-    return (IPAddr)((a << 24) | (b << 16) | (c << 8) | d);
+    return (IPAddr)((d << 24) | (c << 16) | (b << 8) | a);
 }
 
 int do_ping_icmp(const char* ip, double* ms_out) {

@@ -77,7 +77,7 @@ static int ping_thread_func(void* data) {
             for (int i = 0; i < rolling_avg; i++) {
                 double v = t->raw_pings[i];
                 raw_buf[raw_buf_count++] = v;
-                if (v > 0) { sum += v; count++; }
+                if (v >= 0) { sum += v; count++; }
             }
 
             double avg = (count > 0) ? sum / count : -1.0;
@@ -97,6 +97,31 @@ static int ping_thread_func(void* data) {
         SDL_Delay((Uint32)(interval * 1000.0f));
     }
     return 0;
+}
+
+static void start_target_no_reset(App* app, int idx) {
+    PingTarget* t = &app->targets[idx];
+    if (t->running) return;
+
+    t->pending_stop = 0;
+    t->running = 1;
+
+    ThreadCtx* ctx = (ThreadCtx*)SDL_malloc(sizeof(ThreadCtx));
+    if (!ctx) {
+        SDL_LockMutex(app->mutex);
+        t->running = 0;
+        SDL_UnlockMutex(app->mutex);
+        return;
+    }
+    ctx->app = app;
+    ctx->index = idx;
+    t->thread = SDL_CreateThread(ping_thread_func, "ping_thread", ctx);
+    if (!t->thread) {
+        SDL_free(ctx);
+        SDL_LockMutex(app->mutex);
+        t->running = 0;
+        SDL_UnlockMutex(app->mutex);
+    }
 }
 
 static void start_target(App* app, int idx) {
@@ -308,7 +333,7 @@ void app_remove_target(App* app, int idx) {
     app->target_count--;
 
     for (int i = idx; i < app->target_count; i++) {
-        if (running_before[i + 1]) start_target(app, i);
+        if (running_before[i + 1]) start_target_no_reset(app, i);
     }
 
     app->config_dirty = 1;
@@ -339,9 +364,10 @@ void app_render(App* app) {
     SDL_LockMutex(app->mutex);
     rolling_avg_val = app->rolling_avg;
     SDL_UnlockMutex(app->mutex);
-    if (ImGui::InputInt("##rolling_avg", &rolling_avg_val, 0, 0)) {
-        if (rolling_avg_val < 1) rolling_avg_val = 1;
-        if (rolling_avg_val > MAX_RAW_PINGS) rolling_avg_val = MAX_RAW_PINGS;
+    ImGui::InputInt("##rolling_avg", &rolling_avg_val, 0, 0);
+    if (rolling_avg_val < 1) rolling_avg_val = 1;
+    if (rolling_avg_val > MAX_RAW_PINGS) rolling_avg_val = MAX_RAW_PINGS;
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
         SDL_LockMutex(app->mutex);
         app->rolling_avg = rolling_avg_val;
         for (int i = 0; i < app->target_count; i++) app->targets[i].raw_count = 0;
@@ -353,17 +379,23 @@ void app_render(App* app) {
     ImGui::Text("Max campioni:");
     ImGui::SameLine(0, gap);
     ImGui::SetNextItemWidth(50.0f);
-    if (ImGui::InputInt("##max_points", &app->max_points, 0, 0)) {
-        if (app->max_points < 5) app->max_points = 5;
-        if (app->max_points > MAX_POINTS) app->max_points = MAX_POINTS;
+    int max_points_val;
+    SDL_LockMutex(app->mutex);
+    max_points_val = app->max_points;
+    SDL_UnlockMutex(app->mutex);
+    ImGui::InputInt("##max_points", &max_points_val, 0, 0);
+    if (max_points_val < 5) max_points_val = 5;
+    if (max_points_val > MAX_POINTS) max_points_val = MAX_POINTS;
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
         SDL_LockMutex(app->mutex);
-        int resized = chart_resize(&app->chart, app->max_points);
-        SDL_UnlockMutex(app->mutex);
-        if (!resized) {
-            app->max_points = app->chart.max_points;
-        } else {
+        int resized = chart_resize(&app->chart, max_points_val);
+        if (resized) {
+            app->max_points = max_points_val;
             app->config_dirty = 1;
+        } else {
+            max_points_val = app->max_points;
         }
+        SDL_UnlockMutex(app->mutex);
     }
 
     ImGui::SameLine(0, gap);
@@ -494,6 +526,7 @@ void app_render(App* app) {
 
     if (app->config_dirty) {
         AppConfig cfg;
+        memset(&cfg, 0, sizeof(cfg));
         cfg.target_count = app->target_count;
         for (int i = 0; i < app->target_count; i++) {
             strncpy(cfg.targets[i].ip, app->targets[i].ip, 127);
@@ -504,6 +537,7 @@ void app_render(App* app) {
         cfg.max_points = app->max_points;
         cfg.rolling_avg = app->rolling_avg;
         cfg.dark_mode = app->dark_mode;
+        cfg.use_mean = app->use_mean;
         config_save(&cfg);
         app->config_dirty = 0;
     }

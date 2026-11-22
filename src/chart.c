@@ -311,8 +311,10 @@ void chart_render(const ChartData* chart, int target_count, const char* const* t
     for (int i = 0; i < chart->count; i++) {
         const ChartPoint* pt = &chart->points[chart_idx(chart, i)];
         if (pt->valid_count > 0 && pt->valid_max > global_max)
-            global_max = pt->valid_max * 1.1;
+            global_max = pt->valid_max;
     }
+    global_max *= 1.1;
+    if (global_max < 10.0) global_max = 10.0;
     if (global_max < 10.0) global_max = 10.0;
 
     auto val_to_y = [&](double v) -> float {
